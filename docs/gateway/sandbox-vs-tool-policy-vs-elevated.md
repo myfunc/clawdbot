@@ -39,15 +39,51 @@ Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 
 See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace mounts, images).
 
+### Bind mounts (security quick check)
+
+- `docker.binds` *pierces* the sandbox filesystem: whatever you mount is visible inside the container with the mode you set (`:ro` or `:rw`).
+- Default is read-write if you omit the mode; prefer `:ro` for source/secrets.
+- `scope: "shared"` ignores per-agent binds (only global binds apply).
+- Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
+- Workspace access (`workspaceAccess: "ro"`/`"rw"`) is independent of bind modes.
+
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:
+- **Tool profile**: `tools.profile` and `agents.list[].tools.profile` (base allowlist)
 - **Global/per-agent tool policy**: `tools.allow`/`tools.deny` and `agents.list[].tools.allow`/`agents.list[].tools.deny`
 - **Sandbox tool policy** (only applies when sandboxed): `tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` and `agents.list[].tools.sandbox.tools.*`
 
 Rules of thumb:
 - `deny` always wins.
 - If `allow` is non-empty, everything else is treated as blocked.
+
+### Tool groups (shorthands)
+
+Tool policies (global, agent, sandbox) support `group:*` entries that expand to multiple tools:
+
+```json5
+{
+  tools: {
+    sandbox: {
+      tools: {
+        allow: ["group:runtime", "group:fs", "group:sessions", "group:memory"]
+      }
+    }
+  }
+}
+```
+
+Available groups:
+- `group:runtime`: `exec`, `bash`, `process`
+- `group:fs`: `read`, `write`, `edit`, `apply_patch`
+- `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
+- `group:memory`: `memory_search`, `memory_get`
+- `group:ui`: `browser`, `canvas`
+- `group:automation`: `cron`, `gateway`
+- `group:messaging`: `message`
+- `group:nodes`: `nodes`
+- `group:clawdbot`: all built-in Clawdbot tools (excludes provider plugins)
 
 ## Elevated: exec-only “run on host”
 

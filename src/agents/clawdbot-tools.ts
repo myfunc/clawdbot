@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import type { GatewayMessageProvider } from "../utils/message-provider.js";
+import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
@@ -9,6 +9,10 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+} from "./tools/memory-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -24,9 +28,10 @@ export function createClawdbotTools(options?: {
   allowedControlHosts?: string[];
   allowedControlPorts?: number[];
   agentSessionKey?: string;
-  agentProvider?: GatewayMessageProvider;
+  agentChannel?: GatewayMessageChannel;
   agentAccountId?: string;
   agentDir?: string;
+  sandboxRoot?: string;
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
@@ -39,9 +44,20 @@ export function createClawdbotTools(options?: {
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
 }): AnyAgentTool[] {
-  const imageTool = createImageTool({
+  const imageTool = options?.agentDir?.trim()
+    ? createImageTool({
+        config: options?.config,
+        agentDir: options.agentDir,
+        sandboxRoot: options?.sandboxRoot,
+      })
+    : null;
+  const memorySearchTool = createMemorySearchTool({
     config: options?.config,
-    agentDir: options?.agentDir,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  const memoryGetTool = createMemoryGetTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
   });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
@@ -77,18 +93,21 @@ export function createClawdbotTools(options?: {
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
-      agentProvider: options?.agentProvider,
+      agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
-      agentProvider: options?.agentProvider,
+      agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    ...(memorySearchTool && memoryGetTool
+      ? [memorySearchTool, memoryGetTool]
+      : []),
     ...(imageTool ? [imageTool] : []),
   ];
 
@@ -102,7 +121,7 @@ export function createClawdbotTools(options?: {
         config: options?.config,
       }),
       sessionKey: options?.agentSessionKey,
-      messageProvider: options?.agentProvider,
+      messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       sandboxed: options?.sandboxed,
     },

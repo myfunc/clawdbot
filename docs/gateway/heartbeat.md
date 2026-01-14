@@ -57,7 +57,7 @@ custom body (sent verbatim).
 - If nothing needs attention, reply with **`HEARTBEAT_OK`**.
 - During heartbeat runs, Clawdbot treats `HEARTBEAT_OK` as an ack when it appears
   at the **start or end** of the reply. The token is stripped and the reply is
-  dropped if the remaining content is **≤ `ackMaxChars`** (default: 30).
+  dropped if the remaining content is **≤ `ackMaxChars`** (default: 300).
 - If `HEARTBEAT_OK` appears in the **middle** of a reply, it is not treated
   specially.
 - For alerts, **do not** include `HEARTBEAT_OK`; return only the alert text.
@@ -76,9 +76,9 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         model: "anthropic/claude-opus-4-5",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         target: "last",         // last | whatsapp | telegram | discord | slack | signal | imessage | none
-        to: "+15551234567",     // optional provider-specific override
+        to: "+15551234567",     // optional channel-specific override
         prompt: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.",
-        ackMaxChars: 30          // max chars allowed after HEARTBEAT_OK
+        ackMaxChars: 300         // max chars allowed after HEARTBEAT_OK
       }
     }
   }
@@ -91,8 +91,8 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `target`:
-  - `last` (default): deliver to the last used external provider.
-  - explicit provider: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage`.
+  - `last` (default): deliver to the last used external channel.
+  - explicit channel: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage`.
   - `none`: run the heartbeat but **do not deliver** externally.
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram, etc.).
 - `prompt`: overrides the default prompt body (not merged).

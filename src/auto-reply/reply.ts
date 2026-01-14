@@ -24,22 +24,26 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
+import { getChannelDock } from "../channels/dock.js";
+import {
+  CHAT_CHANNEL_ORDER,
+  normalizeChannelId,
+} from "../channels/registry.js";
 import {
   type AgentElevatedAllowFromConfig,
   type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
-import { resolveSessionFilePath } from "../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  saveSessionStore,
+} from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
-import { getProviderDock } from "../providers/dock.js";
-import {
-  CHAT_PROVIDER_ORDER,
-  normalizeProviderId,
-} from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
 import {
@@ -57,6 +61,7 @@ import {
   handleCommands,
 } from "./reply/commands.js";
 import {
+  applyInlineDirectivesFastLane,
   handleDirectiveOnly,
   type InlineDirectives,
   isDirectiveOnly,
@@ -92,8 +97,10 @@ import {
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
+  formatXHighModelHint,
   normalizeThinkLevel,
   type ReasoningLevel,
+  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
@@ -134,8 +141,8 @@ function slugAllowToken(value?: string) {
 }
 
 const SENDER_PREFIXES = [
-  ...CHAT_PROVIDER_ORDER,
-  INTERNAL_MESSAGE_PROVIDER,
+  ...CHAT_CHANNEL_ORDER,
+  INTERNAL_MESSAGE_CHANNEL,
   "user",
   "group",
   "channel",
@@ -146,6 +153,44 @@ function stripSenderPrefix(value?: string) {
   if (!value) return "";
   const trimmed = value.trim();
   return trimmed.replace(SENDER_PREFIX_RE, "");
+}
+
+const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
+  ["/help", "/help"],
+  ["/commands", "/commands"],
+  ["/whoami", "/whoami"],
+  ["/id", "/whoami"],
+]);
+const INLINE_SIMPLE_COMMAND_RE =
+  /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+
+const INLINE_STATUS_RE = /(?:^|\s)\/(?:status|usage)(?=$|\s|:)(?:\s*:\s*)?/gi;
+
+function extractInlineSimpleCommand(body?: string): {
+  command: string;
+  cleaned: string;
+} | null {
+  if (!body) return null;
+  const match = body.match(INLINE_SIMPLE_COMMAND_RE);
+  if (!match || match.index === undefined) return null;
+  const alias = `/${match[1].toLowerCase()}`;
+  const command = INLINE_SIMPLE_COMMAND_ALIASES.get(alias);
+  if (!command) return null;
+  const cleaned = body.replace(match[0], " ").replace(/\s+/g, " ").trim();
+  return { command, cleaned };
+}
+
+function stripInlineStatus(body: string): {
+  cleaned: string;
+  didStrip: boolean;
+} {
+  const trimmed = body.trim();
+  if (!trimmed) return { cleaned: "", didStrip: false };
+  const cleaned = trimmed
+    .replace(INLINE_STATUS_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { cleaned, didStrip: cleaned !== trimmed };
 }
 
 function resolveElevatedAllowList(
@@ -242,9 +287,9 @@ function resolveElevatedPermissions(params: {
     return { enabled, allowed: false, failures };
   }
 
-  const normalizedProvider = normalizeProviderId(params.provider);
+  const normalizedProvider = normalizeChannelId(params.provider);
   const dockFallbackAllowFrom = normalizedProvider
-    ? getProviderDock(normalizedProvider)?.elevated?.allowFromFallback?.({
+    ? getChannelDock(normalizedProvider)?.elevated?.allowFromFallback?.({
         cfg: params.cfg,
         accountId: params.ctx.AccountId,
       })
@@ -412,6 +457,20 @@ export async function getReplyFromConfig(
     sessionCtx.BodyStripped ??
     sessionCtx.Body ??
     "";
+  const command = buildCommandContext({
+    ctx,
+    cfg,
+    agentId,
+    sessionKey,
+    isGroup,
+    triggerBodyNormalized,
+    commandAuthorized,
+  });
+  const allowTextCommands = shouldHandleTextCommands({
+    cfg,
+    surface: command.surface,
+    commandSource: ctx.CommandSource,
+  });
   const clearInlineDirectives = (cleaned: string): InlineDirectives => ({
     cleaned,
     hasThinkDirective: false,
@@ -450,9 +509,20 @@ export async function getReplyFromConfig(
     .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
+  const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
   let parsedDirectives = parseInlineDirectives(commandSource, {
     modelAliases: configuredAliases,
+    allowStatusDirective,
   });
+  const hasInlineStatus =
+    parsedDirectives.hasStatusDirective &&
+    parsedDirectives.cleaned.trim().length > 0;
+  if (hasInlineStatus) {
+    parsedDirectives = {
+      ...parsedDirectives,
+      hasStatusDirective: false,
+    };
+  }
   if (
     isGroup &&
     ctx.WasMentioned !== true &&
@@ -467,15 +537,14 @@ export async function getReplyFromConfig(
       };
     }
   }
-  const hasDirective =
+  const hasInlineDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
     parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||
-    parsedDirectives.hasStatusDirective ||
     parsedDirectives.hasModelDirective ||
     parsedDirectives.hasQueueDirective;
-  if (hasDirective) {
+  if (hasInlineDirective) {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
     const noMentions = isGroup
       ? stripMentions(stripped, ctx, cfg, agentId)
@@ -485,11 +554,20 @@ export async function getReplyFromConfig(
         modelAliases: configuredAliases,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
-        parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
+        const allowInlineStatus =
+          parsedDirectives.hasStatusDirective &&
+          allowTextCommands &&
+          command.isAuthorizedSender;
+        parsedDirectives = allowInlineStatus
+          ? {
+              ...clearInlineDirectives(parsedDirectives.cleaned),
+              hasStatusDirective: true,
+            }
+          : clearInlineDirectives(parsedDirectives.cleaned);
       }
     }
   }
-  const directives = commandAuthorized
+  let directives = commandAuthorized
     ? parsedDirectives
     : {
         ...parsedDirectives,
@@ -502,11 +580,12 @@ export async function getReplyFromConfig(
         queueReset: false,
       };
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const cleanedBody = (() => {
+  let cleanedBody = (() => {
     if (!existingBody) return parsedDirectives.cleaned;
     if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
+        allowStatusDirective,
       }).cleaned;
     }
 
@@ -514,6 +593,7 @@ export async function getReplyFromConfig(
     if (markerIndex < 0) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
+        allowStatusDirective,
       }).cleaned;
     }
 
@@ -526,9 +606,14 @@ export async function getReplyFromConfig(
     );
     const cleanedTail = parseInlineDirectives(tail, {
       modelAliases: configuredAliases,
+      allowStatusDirective,
     }).cleaned;
     return `${head}${cleanedTail}`;
   })();
+
+  if (allowStatusDirective) {
+    cleanedBody = stripInlineStatus(cleanedBody).cleaned;
+  }
 
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
@@ -646,20 +731,25 @@ export async function getReplyFromConfig(
     ? undefined
     : directives.rawModelDirective;
 
-  const command = buildCommandContext({
-    ctx,
-    cfg,
-    agentId,
-    sessionKey,
-    isGroup,
-    triggerBodyNormalized,
-    commandAuthorized,
-  });
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: command.surface,
-    commandSource: ctx.CommandSource,
-  });
+  const inlineStatusRequested =
+    hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
+
+  // Inline control directives should apply immediately, even when mixed with text.
+  let directiveAck: ReplyPayload | undefined;
+
+  if (!command.isAuthorizedSender) {
+    directives = {
+      ...directives,
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasReasoningDirective: false,
+      hasElevatedDirective: false,
+      hasStatusDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      queueReset: false,
+    };
+  }
 
   if (
     isDirectiveOnly({
@@ -671,6 +761,10 @@ export async function getReplyFromConfig(
       isGroup,
     })
   ) {
+    if (!command.isAuthorizedSender) {
+      typing.cleanup();
+      return undefined;
+    }
     const resolvedDefaultThinkLevel =
       (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
       (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
@@ -711,7 +805,11 @@ export async function getReplyFromConfig(
       currentElevatedLevel,
     });
     let statusReply: ReplyPayload | undefined;
-    if (directives.hasStatusDirective && allowTextCommands) {
+    if (
+      directives.hasStatusDirective &&
+      allowTextCommands &&
+      command.isAuthorizedSender
+    ) {
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -736,6 +834,54 @@ export async function getReplyFromConfig(
       return { text: `${directiveReply.text}\n${statusReply.text}` };
     }
     return statusReply ?? directiveReply;
+  }
+
+  const hasAnyDirective =
+    directives.hasThinkDirective ||
+    directives.hasVerboseDirective ||
+    directives.hasReasoningDirective ||
+    directives.hasElevatedDirective ||
+    directives.hasModelDirective ||
+    directives.hasQueueDirective ||
+    directives.hasStatusDirective;
+
+  if (hasAnyDirective && command.isAuthorizedSender) {
+    const fastLane = await applyInlineDirectivesFastLane({
+      directives,
+      commandAuthorized: command.isAuthorizedSender,
+      ctx,
+      cfg,
+      agentId,
+      isGroup,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled,
+      elevatedAllowed,
+      elevatedFailures,
+      messageProviderKey,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      resetModelOverride: modelState.resetModelOverride,
+      provider,
+      model,
+      initialModelLabel,
+      formatModelSwitchEvent,
+      agentCfg,
+      modelState: {
+        resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+        allowedModelKeys: modelState.allowedModelKeys,
+        allowedModelCatalog: modelState.allowedModelCatalog,
+        resetModelOverride: modelState.resetModelOverride,
+      },
+    });
+    directiveAck = fastLane.directiveAck;
+    provider = fastLane.provider;
+    model = fastLane.model;
   }
 
   const persisted = await persistInlineDirectives({
@@ -776,11 +922,103 @@ export async function getReplyFromConfig(
         }
       : undefined;
 
+  const sendInlineReply = async (reply?: ReplyPayload) => {
+    if (!reply) return;
+    if (!opts?.onBlockReply) return;
+    await opts.onBlockReply(reply);
+  };
+
+  const inlineCommand =
+    allowTextCommands && command.isAuthorizedSender
+      ? extractInlineSimpleCommand(cleanedBody)
+      : null;
+  if (inlineCommand) {
+    cleanedBody = inlineCommand.cleaned;
+    sessionCtx.Body = cleanedBody;
+    sessionCtx.BodyStripped = cleanedBody;
+  }
+
+  const handleInlineStatus =
+    !isDirectiveOnly({
+      directives,
+      cleanedBody: directives.cleaned,
+      ctx,
+      cfg,
+      agentId,
+      isGroup,
+    }) && inlineStatusRequested;
+  if (handleInlineStatus) {
+    const inlineStatusReply = await buildStatusReply({
+      cfg,
+      command,
+      sessionEntry,
+      sessionKey,
+      sessionScope,
+      provider,
+      model,
+      contextTokens,
+      resolvedThinkLevel,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+      isGroup,
+      defaultGroupActivation: () => defaultActivation,
+    });
+    await sendInlineReply(inlineStatusReply);
+    directives = { ...directives, hasStatusDirective: false };
+  }
+
+  if (inlineCommand) {
+    const inlineCommandContext = {
+      ...command,
+      rawBodyNormalized: inlineCommand.command,
+      commandBodyNormalized: inlineCommand.command,
+    };
+    const inlineResult = await handleCommands({
+      ctx,
+      cfg,
+      command: inlineCommandContext,
+      agentId,
+      directives,
+      elevated: {
+        enabled: elevatedEnabled,
+        allowed: elevatedAllowed,
+        failures: elevatedFailures,
+      },
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      sessionScope,
+      workspaceDir,
+      defaultGroupActivation: () => defaultActivation,
+      resolvedThinkLevel,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+      provider,
+      model,
+      contextTokens,
+      isGroup,
+    });
+    if (inlineResult.reply) {
+      if (!inlineCommand.cleaned) {
+        typing.cleanup();
+        return inlineResult.reply;
+      }
+      await sendInlineReply(inlineResult.reply);
+    }
+  }
+
+  if (directiveAck) {
+    await sendInlineReply(directiveAck);
+  }
+
   const isEmptyConfig = Object.keys(cfg).length === 0;
-  const skipWhenConfigEmpty = command.providerId
-    ? Boolean(
-        getProviderDock(command.providerId)?.commands?.skipWhenConfigEmpty,
-      )
+  const skipWhenConfigEmpty = command.channelId
+    ? Boolean(getChannelDock(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&
@@ -803,6 +1041,11 @@ export async function getReplyFromConfig(
     command,
     agentId,
     directives,
+    elevated: {
+      enabled: elevatedEnabled,
+      allowed: elevatedAllowed,
+      failures: elevatedFailures,
+    },
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -876,7 +1119,7 @@ export async function getReplyFromConfig(
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
     allowTextCommands &&
-    !commandAuthorized &&
+    (!commandAuthorized || !command.isAuthorizedSender) &&
     !baseBodyTrimmedRaw &&
     hasControlCommand(commandSource, cfg)
   ) {
@@ -957,13 +1200,43 @@ export async function getReplyFromConfig(
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel) {
+    if (
+      maybeLevel &&
+      (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
   }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+  }
+  if (
+    resolvedThinkLevel === "xhigh" &&
+    !supportsXHighThinking(provider, model)
+  ) {
+    const explicitThink =
+      directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    if (explicitThink) {
+      typing.cleanup();
+      return {
+        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+      };
+    }
+    resolvedThinkLevel = "high";
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      sessionEntry.thinkingLevel === "xhigh"
+    ) {
+      sessionEntry.thinkingLevel = "high";
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await saveSessionStore(storePath, sessionStore);
+      }
+    }
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
@@ -980,7 +1253,7 @@ export async function getReplyFromConfig(
     : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
-    provider: sessionCtx.Provider,
+    channel: sessionCtx.Provider,
     sessionEntry,
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
@@ -1044,7 +1317,7 @@ export async function getReplyFromConfig(
       ownerNumbers:
         command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
-      ...(provider === "ollama" ? { enforceFinalTag: true } : {}),
+      ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };
 

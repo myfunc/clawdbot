@@ -25,13 +25,17 @@ import {
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
+import {
+  renderSystemNodeWarning,
+  resolvePreferredNodePath,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
-import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { loadClawdbotPlugins } from "../plugins/loader.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -58,6 +62,7 @@ import {
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
+import { noteSourceInstallIssues } from "./doctor-install.js";
 import {
   maybeMigrateLegacyConfigFile,
   normalizeLegacyConfigValues,
@@ -76,6 +81,7 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
+import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import {
   detectLegacyWorkspaceDirs,
   formatLegacyWorkspaceWarning,
@@ -182,6 +188,12 @@ export async function doctorCommand(
   printWizardHeader(runtime);
   intro("Clawdbot doctor");
 
+  const root = await resolveClawdbotPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+
   const updateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS === "1";
   const canOfferUpdate =
     !updateInProgress &&
@@ -190,11 +202,6 @@ export async function doctorCommand(
     options.repair !== true &&
     Boolean(process.stdin.isTTY);
   if (canOfferUpdate) {
-    const root = await resolveClawdbotPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    });
     if (root) {
       const git = await detectClawdbotGitCheckout(root);
       if (git === "git") {
@@ -244,6 +251,9 @@ export async function doctorCommand(
     }
   }
 
+  await maybeRepairUiProtocolFreshness(runtime, prompter);
+  noteSourceInstallIssues(root);
+
   await maybeMigrateLegacyConfigFile(runtime);
 
   const snapshot = await readConfigFileSnapshot();
@@ -271,7 +281,7 @@ export async function doctorCommand(
             initialValue: true,
           });
     if (migrate) {
-      // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
+      // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
       const { config: migrated, changes } = migrateLegacyConfig(
         snapshot.parsed,
       );
@@ -443,6 +453,7 @@ export async function doctorCommand(
     let loaded = false;
     try {
       loaded = await service.isLoaded({
+        env: process.env,
         profile: process.env.CLAWDBOT_PROFILE,
       });
     } catch {
@@ -544,20 +555,20 @@ export async function doctorCommand(
   if (healthOk) {
     try {
       const status = await callGateway<Record<string, unknown>>({
-        method: "providers.status",
+        method: "channels.status",
         params: { probe: true, timeoutMs: 5000 },
         timeoutMs: 6000,
       });
-      const issues = collectProvidersStatusIssues(status);
+      const issues = collectChannelStatusIssues(status);
       if (issues.length > 0) {
         note(
           issues
             .map(
               (issue) =>
-                `- ${issue.provider} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
+                `- ${issue.channel} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
             )
             .join("\n"),
-          "Provider warnings",
+          "Channel warnings",
         );
       }
     } catch {
@@ -568,6 +579,7 @@ export async function doctorCommand(
   if (!healthOk) {
     const service = resolveGatewayService();
     const loaded = await service.isLoaded({
+      env: process.env,
       profile: process.env.CLAWDBOT_PROFILE,
     });
     let serviceRuntime:
@@ -621,6 +633,16 @@ export async function doctorCommand(
               runtime: daemonRuntime,
               nodePath,
             });
+          if (daemonRuntime === "node") {
+            const systemNode = await resolveSystemNodeInfo({
+              env: process.env,
+            });
+            const warning = renderSystemNodeWarning(
+              systemNode,
+              programArguments[0],
+            );
+            if (warning) note(warning, "Gateway runtime");
+          }
           const environment = buildServiceEnvironment({
             env: process.env,
             port,
@@ -659,6 +681,7 @@ export async function doctorCommand(
         });
         if (start) {
           await service.restart({
+            env: process.env,
             profile: process.env.CLAWDBOT_PROFILE,
             stdout: process.stdout,
           });
@@ -681,6 +704,7 @@ export async function doctorCommand(
         });
         if (restart) {
           await service.restart({
+            env: process.env,
             profile: process.env.CLAWDBOT_PROFILE,
             stdout: process.stdout,
           });

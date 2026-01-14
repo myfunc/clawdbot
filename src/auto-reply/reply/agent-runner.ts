@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -15,7 +16,14 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
 } from "../../agents/pi-embedded-helpers.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxRuntimeStatus,
+} from "../../agents/sandbox.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
+import { getChannelDock } from "../../channels/dock.js";
+import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -32,10 +40,8 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { isAudioFileName } from "../../media/mime.js";
-import { getProviderDock } from "../../providers/dock.js";
-import type { ProviderThreadingToolContext } from "../../providers/plugins/types.js";
-import { normalizeProviderId } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -53,6 +59,11 @@ import {
 } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import {
+  resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushSettings,
+  shouldRunMemoryFlush,
+} from "./memory-flush.js";
 import {
   enqueueFollowupRun,
   type FollowupRun,
@@ -85,19 +96,19 @@ function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: ClawdbotConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
-}): ProviderThreadingToolContext {
+}): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
   if (!config) return {};
-  const provider = normalizeProviderId(sessionCtx.Provider);
+  const provider = normalizeChannelId(sessionCtx.Provider);
   if (!provider) return {};
-  const dock = getProviderDock(provider);
+  const dock = getChannelDock(provider);
   if (!dock?.threading?.buildToolContext) return {};
   return (
     dock.threading.buildToolContext({
       cfg: config,
       accountId: sessionCtx.AccountId,
       context: {
-        Provider: sessionCtx.Provider,
+        Channel: sessionCtx.Provider,
         To: sessionCtx.To,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
@@ -178,6 +189,9 @@ const appendUsageLine = (
   updated[index] = next;
   return updated;
 };
+
+const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
+  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -337,6 +351,134 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
+  const memoryFlushSettings = resolveMemoryFlushSettings(cfg);
+  const memoryFlushWritable = (() => {
+    if (!sessionKey) return true;
+    const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+    if (!runtime.sandboxed) return true;
+    const sandboxCfg = resolveSandboxConfigForAgent(cfg, runtime.agentId);
+    return sandboxCfg.workspaceAccess === "rw";
+  })();
+  const shouldFlushMemory =
+    memoryFlushSettings &&
+    memoryFlushWritable &&
+    !isHeartbeat &&
+    !isCliProvider(followupRun.run.provider, cfg) &&
+    shouldRunMemoryFlush({
+      entry:
+        activeSessionEntry ??
+        (sessionKey ? activeSessionStore?.[sessionKey] : undefined),
+      contextWindowTokens: resolveMemoryFlushContextWindowTokens({
+        modelId: followupRun.run.model ?? defaultModel,
+        agentCfgContextTokens,
+      }),
+      reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
+      softThresholdTokens: memoryFlushSettings.softThresholdTokens,
+    });
+  if (shouldFlushMemory) {
+    const flushRunId = crypto.randomUUID();
+    if (sessionKey) {
+      registerAgentRunContext(flushRunId, {
+        sessionKey,
+        verboseLevel: resolvedVerboseLevel,
+      });
+    }
+    let memoryCompactionCompleted = false;
+    const flushSystemPrompt = [
+      followupRun.run.extraSystemPrompt,
+      memoryFlushSettings.systemPrompt,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    try {
+      await runWithModelFallback({
+        cfg: followupRun.run.config,
+        provider: followupRun.run.provider,
+        model: followupRun.run.model,
+        fallbacksOverride: resolveAgentModelFallbacksOverride(
+          followupRun.run.config,
+          resolveAgentIdFromSessionKey(followupRun.run.sessionKey),
+        ),
+        run: (provider, model) =>
+          runEmbeddedPiAgent({
+            sessionId: followupRun.run.sessionId,
+            sessionKey,
+            messageProvider:
+              sessionCtx.Provider?.trim().toLowerCase() || undefined,
+            agentAccountId: sessionCtx.AccountId,
+            // Provider threading context for tool auto-injection
+            ...buildThreadingToolContext({
+              sessionCtx,
+              config: followupRun.run.config,
+              hasRepliedRef: opts?.hasRepliedRef,
+            }),
+            sessionFile: followupRun.run.sessionFile,
+            workspaceDir: followupRun.run.workspaceDir,
+            agentDir: followupRun.run.agentDir,
+            config: followupRun.run.config,
+            skillsSnapshot: followupRun.run.skillsSnapshot,
+            prompt: memoryFlushSettings.prompt,
+            extraSystemPrompt: flushSystemPrompt,
+            ownerNumbers: followupRun.run.ownerNumbers,
+            enforceFinalTag: resolveEnforceFinalTag(followupRun.run, provider),
+            provider,
+            model,
+            authProfileId: followupRun.run.authProfileId,
+            thinkLevel: followupRun.run.thinkLevel,
+            verboseLevel: followupRun.run.verboseLevel,
+            reasoningLevel: followupRun.run.reasoningLevel,
+            bashElevated: followupRun.run.bashElevated,
+            timeoutMs: followupRun.run.timeoutMs,
+            runId: flushRunId,
+            onAgentEvent: (evt) => {
+              if (evt.stream === "compaction") {
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const willRetry = Boolean(evt.data.willRetry);
+                if (phase === "end" && !willRetry) {
+                  memoryCompactionCompleted = true;
+                }
+              }
+            },
+          }),
+      });
+      let memoryFlushCompactionCount =
+        activeSessionEntry?.compactionCount ??
+        (sessionKey ? activeSessionStore?.[sessionKey]?.compactionCount : 0) ??
+        0;
+      if (memoryCompactionCompleted) {
+        const nextCount = await incrementCompactionCount({
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+        });
+        if (typeof nextCount === "number") {
+          memoryFlushCompactionCount = nextCount;
+        }
+      }
+      if (storePath && sessionKey) {
+        try {
+          const updatedEntry = await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              memoryFlushAt: Date.now(),
+              memoryFlushCompactionCount,
+            }),
+          });
+          if (updatedEntry) {
+            activeSessionEntry = updatedEntry;
+          }
+        } catch (err) {
+          logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
+        }
+      }
+    } catch (err) {
+      logVerbose(`memory flush run failed: ${String(err)}`);
+    }
+  }
+
   const runFollowupTurn = createFollowupRunner({
     opts,
     typing,
@@ -414,10 +556,45 @@ export async function runReplyAgent(params: {
         const allowPartialStream = !(
           followupRun.run.reasoningLevel === "stream" && opts?.onReasoningStream
         );
+        const normalizeStreamingText = (
+          payload: ReplyPayload,
+        ): { text?: string; skip: boolean } => {
+          if (!allowPartialStream) return { skip: true };
+          let text = payload.text;
+          if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+            const stripped = stripHeartbeatToken(text, {
+              mode: "message",
+            });
+            if (stripped.didStrip && !didLogHeartbeatStrip) {
+              didLogHeartbeatStrip = true;
+              logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+            }
+            if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
+              return { skip: true };
+            }
+            text = stripped.text;
+          }
+          if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+            return { skip: true };
+          }
+          return { text, skip: false };
+        };
+        const handlePartialForTyping = async (
+          payload: ReplyPayload,
+        ): Promise<string | undefined> => {
+          const { text, skip } = normalizeStreamingText(payload);
+          if (skip || !text) return undefined;
+          await typingSignals.signalTextDelta(text);
+          return text;
+        };
         const fallbackResult = await runWithModelFallback({
           cfg: followupRun.run.config,
           provider: followupRun.run.provider,
           model: followupRun.run.model,
+          fallbacksOverride: resolveAgentModelFallbacksOverride(
+            followupRun.run.config,
+            resolveAgentIdFromSessionKey(followupRun.run.sessionKey),
+          ),
           run: (provider, model) => {
             if (isCliProvider(provider, followupRun.run.config)) {
               const startedAt = Date.now();
@@ -495,7 +672,10 @@ export async function runReplyAgent(params: {
               prompt: commandBody,
               extraSystemPrompt: followupRun.run.extraSystemPrompt,
               ownerNumbers: followupRun.run.ownerNumbers,
-              enforceFinalTag: followupRun.run.enforceFinalTag,
+              enforceFinalTag: resolveEnforceFinalTag(
+                followupRun.run,
+                provider,
+              ),
               provider,
               model,
               authProfileId: followupRun.run.authProfileId,
@@ -507,36 +687,20 @@ export async function runReplyAgent(params: {
               runId,
               blockReplyBreak: resolvedBlockStreamingBreak,
               blockReplyChunking,
-              onPartialReply:
-                opts?.onPartialReply && allowPartialStream
-                  ? async (payload) => {
-                      let text = payload.text;
-                      if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
-                        const stripped = stripHeartbeatToken(text, {
-                          mode: "message",
-                        });
-                        if (stripped.didStrip && !didLogHeartbeatStrip) {
-                          didLogHeartbeatStrip = true;
-                          logVerbose(
-                            "Stripped stray HEARTBEAT_OK token from reply",
-                          );
-                        }
-                        if (
-                          stripped.shouldSkip &&
-                          (payload.mediaUrls?.length ?? 0) === 0
-                        ) {
-                          return;
-                        }
-                        text = stripped.text;
-                      }
-                      if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) return;
-                      await typingSignals.signalTextDelta(text);
-                      await opts.onPartialReply?.({
-                        text,
-                        mediaUrls: payload.mediaUrls,
-                      });
-                    }
-                  : undefined,
+              onPartialReply: allowPartialStream
+                ? async (payload) => {
+                    const textForTyping = await handlePartialForTyping(payload);
+                    if (!opts?.onPartialReply || textForTyping === undefined)
+                      return;
+                    await opts.onPartialReply({
+                      text: textForTyping,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  }
+                : undefined,
+              onAssistantMessageStart: async () => {
+                await typingSignals.signalMessageStart();
+              },
               onReasoningStream:
                 typingSignals.shouldStartOnReasoning || opts?.onReasoningStream
                   ? async (payload) => {
@@ -552,7 +716,7 @@ export async function runReplyAgent(params: {
                 if (evt.stream === "tool") {
                   const phase =
                     typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  if (phase === "start") {
+                  if (phase === "start" || phase === "update") {
                     void typingSignals.signalToolStart();
                   }
                 }
@@ -569,21 +733,10 @@ export async function runReplyAgent(params: {
               onBlockReply:
                 blockStreamingEnabled && opts?.onBlockReply
                   ? async (payload) => {
-                      let text = payload.text;
-                      if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
-                        const stripped = stripHeartbeatToken(text, {
-                          mode: "message",
-                        });
-                        if (stripped.didStrip && !didLogHeartbeatStrip) {
-                          didLogHeartbeatStrip = true;
-                          logVerbose(
-                            "Stripped stray HEARTBEAT_OK token from reply",
-                          );
-                        }
-                        const hasMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                        if (stripped.shouldSkip && !hasMedia) return;
-                        text = stripped.text;
-                      }
+                      const { text, skip } = normalizeStreamingText(payload);
+                      const hasPayloadMedia =
+                        (payload.mediaUrls?.length ?? 0) > 0;
+                      if (skip && !hasPayloadMedia) return;
                       const taggedPayload = applyReplyTagsToPayload(
                         {
                           text,
@@ -606,18 +759,18 @@ export async function runReplyAgent(params: {
                         },
                       );
                       const cleaned = parsed.text || undefined;
-                      const hasMedia =
+                      const hasRenderableMedia =
                         Boolean(taggedPayload.mediaUrl) ||
                         (taggedPayload.mediaUrls?.length ?? 0) > 0;
                       // Skip empty payloads unless they have audioAsVoice flag (need to track it)
                       if (
                         !cleaned &&
-                        !hasMedia &&
+                        !hasRenderableMedia &&
                         !payload.audioAsVoice &&
                         !parsed.audioAsVoice
                       )
                         return;
-                      if (parsed.isSilent && !hasMedia) return;
+                      if (parsed.isSilent && !hasRenderableMedia) return;
 
                       const blockPayload: ReplyPayload = applyReplyToMode({
                         ...taggedPayload,
@@ -656,25 +809,8 @@ export async function runReplyAgent(params: {
                     // If a tool callback starts typing after the run finalized, we can end up with
                     // a typing loop that never sees a matching markRunComplete(). Track and drain.
                     const task = (async () => {
-                      let text = payload.text;
-                      if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
-                        const stripped = stripHeartbeatToken(text, {
-                          mode: "message",
-                        });
-                        if (stripped.didStrip && !didLogHeartbeatStrip) {
-                          didLogHeartbeatStrip = true;
-                          logVerbose(
-                            "Stripped stray HEARTBEAT_OK token from reply",
-                          );
-                        }
-                        if (
-                          stripped.shouldSkip &&
-                          (payload.mediaUrls?.length ?? 0) === 0
-                        ) {
-                          return;
-                        }
-                        text = stripped.text;
-                      }
+                      const { text, skip } = normalizeStreamingText(payload);
+                      if (skip) return;
                       await typingSignals.signalTextDelta(text);
                       await opts.onToolResult?.({
                         text,
@@ -698,6 +834,20 @@ export async function runReplyAgent(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+
+        // Some embedded runs surface context overflow as an error payload instead of throwing.
+        // Treat those as a session-level failure and auto-recover by starting a fresh session.
+        const embeddedError = runResult.meta?.error;
+        if (
+          embeddedError &&
+          isContextOverflowError(embeddedError.message) &&
+          !didResetAfterCompactionFailure &&
+          (await resetSessionAfterCompactionFailure(embeddedError.message))
+        ) {
+          didResetAfterCompactionFailure = true;
+          continue;
+        }
+
         break;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -758,7 +908,7 @@ export async function runReplyAgent(params: {
         defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
         return finalizeWithFollowup({
           text: isContextOverflow
-            ? "⚠️ Context overflow - conversation too long. Starting fresh might help!"
+            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
             : `⚠️ Agent failed before reply: ${message}. Check gateway logs for details.`,
         });
       }

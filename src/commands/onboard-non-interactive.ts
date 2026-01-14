@@ -5,8 +5,11 @@ import {
   ensureAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   type ClawdbotConfig,
   CONFIG_PATH_CLAWDBOT,
@@ -16,7 +19,11 @@ import {
 } from "../config/config.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
+import {
+  renderSystemNodeWarning,
+  resolvePreferredNodePath,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
@@ -24,6 +31,10 @@ import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
@@ -34,15 +45,18 @@ import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
-  applyMinimaxHostedConfig,
+  applyMoonshotConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
+  applySyntheticConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
+  setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setSyntheticApiKey,
   setZaiApiKey,
 } from "./onboard-auth.js";
 import {
@@ -123,6 +137,13 @@ export async function runNonInteractiveOnboarding(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    runtime.error(
+      "Config invalid. Run `clawdbot doctor` to repair it, then re-run onboarding.",
+    );
+    runtime.exit(1);
+    return;
+  }
   const baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
@@ -192,7 +213,65 @@ export async function runNonInteractiveOnboarding(
   };
 
   const authChoice: AuthChoice = opts.authChoice ?? "skip";
-  if (authChoice === "apiKey") {
+  if (authChoice === "token") {
+    const providerRaw = opts.tokenProvider?.trim();
+    if (!providerRaw) {
+      runtime.error("Missing --token-provider for --auth-choice token.");
+      runtime.exit(1);
+      return;
+    }
+    const provider = normalizeProviderId(providerRaw);
+    if (provider !== "anthropic") {
+      runtime.error(
+        "Only --token-provider anthropic is supported for --auth-choice token.",
+      );
+      runtime.exit(1);
+      return;
+    }
+    const tokenRaw = opts.token?.trim();
+    if (!tokenRaw) {
+      runtime.error("Missing --token for --auth-choice token.");
+      runtime.exit(1);
+      return;
+    }
+    const tokenError = validateAnthropicSetupToken(tokenRaw);
+    if (tokenError) {
+      runtime.error(tokenError);
+      runtime.exit(1);
+      return;
+    }
+
+    let expires: number | undefined;
+    const expiresInRaw = opts.tokenExpiresIn?.trim();
+    if (expiresInRaw) {
+      try {
+        expires =
+          Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
+      } catch (err) {
+        runtime.error(`Invalid --token-expires-in: ${String(err)}`);
+        runtime.exit(1);
+        return;
+      }
+    }
+
+    const profileId =
+      opts.tokenProfileId?.trim() ||
+      buildTokenProfileId({ provider, name: "" });
+    upsertAuthProfile({
+      profileId,
+      credential: {
+        type: "token",
+        provider,
+        token: tokenRaw.trim(),
+        ...(expires ? { expires } : {}),
+      },
+    });
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider,
+      mode: "token",
+    });
+  } else if (authChoice === "apiKey") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "anthropic",
       cfg: baseConfig,
@@ -285,7 +364,49 @@ export async function runNonInteractiveOnboarding(
       mode: "api_key",
     });
     nextConfig = applyOpenrouterConfig(nextConfig);
-  } else if (authChoice === "minimax-cloud") {
+  } else if (authChoice === "moonshot-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "moonshot",
+      cfg: baseConfig,
+      flagValue: opts.moonshotApiKey,
+      flagName: "--moonshot-api-key",
+      envVar: "MOONSHOT_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setMoonshotApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "moonshot:default",
+      provider: "moonshot",
+      mode: "api_key",
+    });
+    nextConfig = applyMoonshotConfig(nextConfig);
+  } else if (authChoice === "synthetic-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "synthetic",
+      cfg: baseConfig,
+      flagValue: opts.syntheticApiKey,
+      flagName: "--synthetic-api-key",
+      envVar: "SYNTHETIC_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setSyntheticApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "synthetic:default",
+      provider: "synthetic",
+      mode: "api_key",
+    });
+    nextConfig = applySyntheticConfig(nextConfig);
+  } else if (
+    authChoice === "minimax-cloud" ||
+    authChoice === "minimax-api" ||
+    authChoice === "minimax-api-lightning"
+  ) {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "minimax",
       cfg: baseConfig,
@@ -303,26 +424,11 @@ export async function runNonInteractiveOnboarding(
       provider: "minimax",
       mode: "api_key",
     });
-    nextConfig = applyMinimaxHostedConfig(nextConfig);
-  } else if (authChoice === "minimax-api") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "minimax",
-      cfg: baseConfig,
-      flagValue: opts.minimaxApiKey,
-      flagName: "--minimax-api-key",
-      envVar: "MINIMAX_API_KEY",
-      runtime,
-    });
-    if (!resolved) return;
-    if (resolved.source !== "profile") {
-      await setMinimaxApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "minimax:default",
-      provider: "minimax",
-      mode: "api_key",
-    });
-    nextConfig = applyMinimaxApiConfig(nextConfig);
+    const modelId =
+      authChoice === "minimax-api-lightning"
+        ? "MiniMax-M2.1-lightning"
+        : "MiniMax-M2.1";
+    nextConfig = applyMinimaxApiConfig(nextConfig, modelId);
   } else if (authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
@@ -376,17 +482,12 @@ export async function runNonInteractiveOnboarding(
     });
     nextConfig = applyOpencodeZenConfig(nextConfig);
   } else if (
-    authChoice === "token" ||
     authChoice === "oauth" ||
+    authChoice === "chutes" ||
     authChoice === "openai-codex" ||
     authChoice === "antigravity"
   ) {
-    const label =
-      authChoice === "antigravity"
-        ? "Antigravity"
-        : authChoice === "token"
-          ? "Token"
-          : "OAuth";
+    const label = authChoice === "antigravity" ? "Antigravity" : "OAuth";
     runtime.error(`${label} requires interactive mode.`);
     runtime.exit(1);
     return;
@@ -526,6 +627,14 @@ export async function runNonInteractiveOnboarding(
           runtime: daemonRuntimeRaw,
           nodePath,
         });
+      if (daemonRuntimeRaw === "node") {
+        const systemNode = await resolveSystemNodeInfo({ env: process.env });
+        const warning = renderSystemNodeWarning(
+          systemNode,
+          programArguments[0],
+        );
+        if (warning) runtime.log(warning);
+      }
       const environment = buildServiceEnvironment({
         env: process.env,
         port,

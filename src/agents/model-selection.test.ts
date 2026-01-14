@@ -62,6 +62,41 @@ describe("buildAllowedModelSet", () => {
       true,
     );
   });
+
+  it("allows explicit custom providers from models.providers", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "moonshot/kimi-k2-0905-preview": { alias: "kimi" },
+          },
+        },
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            apiKey: "x",
+            api: "openai-completions",
+            models: [{ id: "kimi-k2-0905-preview", name: "Kimi" }],
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const allowed = buildAllowedModelSet({
+      cfg,
+      catalog: [],
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+    });
+
+    expect(allowed.allowAny).toBe(false);
+    expect(
+      allowed.allowedKeys.has(modelKey("moonshot", "kimi-k2-0905-preview")),
+    ).toBe(true);
+  });
 });
 
 describe("parseModelRef", () => {
@@ -70,6 +105,24 @@ describe("parseModelRef", () => {
     expect(ref).toEqual({
       provider: "anthropic",
       model: "claude-opus-4-5",
+    });
+  });
+
+  it("normalizes google gemini 3 models to preview ids", () => {
+    expect(parseModelRef("google/gemini-3-pro", "anthropic")).toEqual({
+      provider: "google",
+      model: "gemini-3-pro-preview",
+    });
+    expect(parseModelRef("google/gemini-3-flash", "anthropic")).toEqual({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+    });
+  });
+
+  it("normalizes default-provider google models", () => {
+    expect(parseModelRef("gemini-3-pro", "google")).toEqual({
+      provider: "google",
+      model: "gemini-3-pro-preview",
     });
   });
 });

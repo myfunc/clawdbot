@@ -1,10 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "./onboarding.js";
 import type { WizardPrompter } from "./prompts.js";
 
-const setupProviders = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
@@ -21,8 +25,8 @@ const ensureControlUiAssetsBuilt = vi.hoisted(() =>
 );
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 
-vi.mock("../commands/onboard-providers.js", () => ({
-  setupProviders,
+vi.mock("../commands/onboard-channels.js", () => ({
+  setupChannels,
 }));
 
 vi.mock("../commands/onboard-skills.js", () => ({
@@ -76,6 +80,58 @@ vi.mock("../tui/tui.js", () => ({
 }));
 
 describe("runOnboardingWizard", () => {
+  it("exits when config is invalid", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.clawdbot/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: false,
+      config: {},
+      issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
+      legacyIssues: [{ path: "routing.allowFrom", message: "Legacy key" }],
+    });
+
+    const select: WizardPrompter["select"] = vi.fn(async () => "quickstart");
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select,
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      runOnboardingWizard(
+        {
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("exit:1");
+
+    expect(select).not.toHaveBeenCalled();
+    expect(prompter.outro).toHaveBeenCalled();
+  });
+
   it("skips prompts and setup steps when flags are set", async () => {
     const select: WizardPrompter["select"] = vi.fn(async () => "quickstart");
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
@@ -112,9 +168,69 @@ describe("runOnboardingWizard", () => {
     );
 
     expect(select).not.toHaveBeenCalled();
-    expect(setupProviders).not.toHaveBeenCalled();
+    expect(setupChannels).not.toHaveBeenCalled();
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("launches TUI without auto-delivery when hatching", async () => {
+    runTui.mockClear();
+
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-onboard-"),
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME),
+      "{}",
+    );
+
+    const confirm: WizardPrompter["confirm"] = vi.fn(async (opts) => {
+      if (opts.message === "Do you want to hatch your bot now?") return true;
+      return opts.initialValue ?? false;
+    });
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "quickstart"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm,
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await runOnboardingWizard(
+      {
+        flow: "quickstart",
+        mode: "local",
+        workspace: workspaceDir,
+        authChoice: "skip",
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliver: false,
+        message: "Wake up, my friend!",
+      }),
+    );
+
+    await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 });

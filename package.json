@@ -1,6 +1,6 @@
 {
   "name": "clawdbot",
-  "version": "2026.1.10",
+  "version": "2026.1.14",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
@@ -17,6 +17,7 @@
     "dist/config/**",
     "dist/control-ui/**",
     "dist/cron/**",
+    "dist/channels/**",
     "dist/daemon/**",
     "dist/discord/**",
     "dist/gateway/**",
@@ -27,6 +28,7 @@
     "dist/media/**",
     "dist/msteams/**",
     "dist/process/**",
+    "dist/plugins/**",
     "dist/sessions/**",
     "dist/providers/**",
     "dist/signal/**",
@@ -43,11 +45,13 @@
     "README-header.png",
     "CHANGELOG.md",
     "LICENSE",
+    "patches/**",
     "scripts/postinstall.js",
     "dist/terminal/**",
     "dist/routing/**",
     "dist/utils/**",
     "dist/logging/**",
+    "dist/memory/**",
     "dist/markdown/**",
     "dist/pairing/**",
     "dist/whatsapp/**"
@@ -67,8 +71,8 @@
     "start": "tsx src/entry.ts",
     "clawdbot": "tsx src/entry.ts",
     "gateway:watch": "tsx watch src/entry.ts gateway --force",
-    "gateway:dev": "CLAWDBOT_PROFILE=dev tsx src/entry.ts gateway --dev",
-    "gateway:dev:reset": "CLAWDBOT_PROFILE=dev tsx src/entry.ts gateway --reset",
+    "gateway:dev": "tsx src/entry.ts --dev gateway",
+    "gateway:dev:reset": "tsx src/entry.ts --dev gateway --reset",
     "tui": "tsx src/entry.ts tui",
     "tui:dev": "CLAWDBOT_PROFILE=dev tsx src/entry.ts tui",
     "clawdbot:rpc": "tsx src/entry.ts agent --mode rpc --json",
@@ -97,7 +101,7 @@
     "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:live": "CLAWDBOT_LIVE_TEST=1 vitest run --config vitest.live.config.ts",
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",
@@ -115,7 +119,8 @@
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift",
-    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh"
+    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
+    "check:loc": "tsx scripts/check-ts-max-loc.ts --max 500"
   },
   "keywords": [],
   "author": "",
@@ -130,10 +135,10 @@
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.4",
-    "@mariozechner/pi-agent-core": "^0.42.2",
-    "@mariozechner/pi-ai": "^0.42.2",
-    "@mariozechner/pi-coding-agent": "^0.42.2",
-    "@mariozechner/pi-tui": "^0.42.2",
+    "@mariozechner/pi-agent-core": "^0.45.3",
+    "@mariozechner/pi-ai": "0.45.7",
+    "@mariozechner/pi-coding-agent": "^0.45.3",
+    "@mariozechner/pi-tui": "^0.45.3",
     "@microsoft/agents-hosting": "^1.1.1",
     "@microsoft/agents-hosting-express": "^1.1.1",
     "@microsoft/agents-hosting-extensions-teams": "^1.1.1",
@@ -158,6 +163,7 @@
     "json5": "^2.2.3",
     "long": "5.3.2",
     "markdown-it": "^14.1.0",
+    "node-llama-cpp": "3.14.5",
     "osc-progress": "^0.2.0",
     "playwright-core": "1.57.0",
     "proper-lockfile": "^4.1.2",
@@ -178,7 +184,7 @@
     "@types/body-parser": "^1.19.6",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^25.0.3",
+    "@types/node": "^25.0.6",
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
@@ -204,7 +210,7 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-ai@0.42.2": "patches/@mariozechner__pi-ai@0.42.2.patch"
+      "@mariozechner/pi-ai@0.45.7": "patches/@mariozechner__pi-ai@0.45.7.patch"
     }
   },
   "vitest": {

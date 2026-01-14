@@ -6,18 +6,29 @@ read_when:
 ---
 # Slash commands
 
-Commands are handled by the Gateway. Send them as a **standalone** message that starts with `/`.
-Inline text like `hello /status` is ignored for commands.
+Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
+The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
-Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even when inline and are stripped from the message before the model sees it.
+There are two related systems:
+
+- **Commands**: standalone `/...` messages.
+- **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue`.
+  - Directives are stripped from the message before the model sees it.
+  - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
+  - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
+
+There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`).
+They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
 
 ## Config
 
 ```json5
 {
   commands: {
-    native: false,
+    native: "auto",
     text: true,
+    bash: false,
+    bashForegroundMs: 2000,
     config: false,
     debug: false,
     restart: false,
@@ -28,9 +39,12 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 
 - `commands.text` (default `true`) enables parsing `/...` in chat messages.
   - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/MS Teams), text commands still work even if you set this to `false`.
-- `commands.native` (default `false`) registers native commands on Discord/Slack/Telegram.
-  - `false` clears previously registered commands on Discord/Telegram at startup.
-  - Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.native` (default `"auto"`) registers native commands.
+  - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
+  - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).
+  - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
+- `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
@@ -40,7 +54,7 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 Text + native (when enabled):
 - `/help`
 - `/commands`
-- `/status` (show current status; includes a short usage line when available)
+- `/status` (show current status; includes a short provider usage/quota line when available)
 - `/usage` (alias: `/status`)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
@@ -48,18 +62,25 @@ Text + native (when enabled):
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
 - `/restart`
+- `/dock-telegram` (switch replies to Telegram)
+- `/dock-discord` (switch replies to Discord)
+- `/dock-slack` (switch replies to Slack)
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
 - `/reset` or `/new`
-- `/think <level>` (aliases: `/thinking`, `/t`)
+- `/think <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only; aliases: `/thinking`, `/t`)
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
+- `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
 
 Text-only:
 - `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
+- `! <command>` (host-only; one at a time; use `!poll` + `!stop` for long-running jobs)
+- `!poll` (check output / status; accepts optional `sessionId`; `/bash poll` also works)
+- `!stop` (stop the running bash job; accepts optional `sessionId`; `/bash stop` also works)
 
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
@@ -68,6 +89,35 @@ Notes:
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
+- **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
+- **Inline shortcuts (allowlisted senders only):** `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`) also work when embedded in text.
+- Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
+
+## Usage vs cost (what shows where)
+
+- **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` when provider usage tracking is enabled.
+- **Per-response tokens/cost** is controlled by `/cost on|off` (appended to normal replies).
+- `/model status` is about **models/auth/endpoints**, not usage.
+
+## Model selection (`/model`)
+
+`/model` is implemented as a directive.
+
+Examples:
+
+```
+/model
+/model list
+/model 3
+/model openai/gpt-5.2
+/model opus@anthropic:claude-cli
+/model status
+```
+
+Notes:
+- `/model` and `/model list` show a compact, numbered picker (model family + available providers).
+- `/model <#>` selects from that picker (and prefers the current provider when possible).
+- `/model status` shows the detailed view, including configured provider endpoint (`baseUrl`) and API mode (`api`) when available.
 
 ## Debug overrides
 
@@ -78,7 +128,7 @@ Examples:
 ```
 /debug show
 /debug set messages.responsePrefix="[clawdbot]"
-/debug set whatsapp.allowFrom=["+1555","+4477"]
+/debug set channels.whatsapp.allowFrom=["+1555","+4477"]
 /debug unset messages.responsePrefix
 /debug reset
 ```
@@ -110,7 +160,7 @@ Notes:
 - **Text commands** run in the normal chat session (DMs share `main`, groups have their own session).
 - **Native commands** use isolated sessions:
   - Discord: `agent:<agentId>:discord:slash:<userId>`
-  - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `slack.slashCommand.sessionPrefix`)
+  - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
   - Telegram: `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
 - **`/stop`** targets the active chat session so it can abort the current run.
-- **Slack:** `slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).
+- **Slack:** `channels.slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).

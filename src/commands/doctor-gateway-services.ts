@@ -13,8 +13,9 @@ import {
 } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import {
+  renderSystemNodeWarning,
   resolvePreferredNodePath,
-  resolveSystemNodePath,
+  resolveSystemNodeInfo,
 } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
@@ -99,6 +100,7 @@ export async function maybeMigrateLegacyGatewayService(
 
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({
+    env: process.env,
     profile: process.env.CLAWDBOT_PROFILE,
   });
   if (loaded) {
@@ -183,10 +185,13 @@ export async function maybeRepairGatewayServiceConfig(
     command,
   });
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
-  const systemNodePath = needsNodeRuntime
-    ? await resolveSystemNodePath(process.env)
+  const systemNodeInfo = needsNodeRuntime
+    ? await resolveSystemNodeInfo({ env: process.env })
     : null;
+  const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath) {
+    const warning = renderSystemNodeWarning(systemNodeInfo);
+    if (warning) note(warning, "Gateway runtime");
     note(
       "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
       "Gateway runtime",

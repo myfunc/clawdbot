@@ -25,10 +25,13 @@ model as `provider/model`.
 - [OpenAI (API + Codex)](/providers/openai)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [OpenRouter](/providers/openrouter)
+- [Moonshot AI (Kimi)](/providers/moonshot)
+- [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
+- [Amazon Bedrock](/bedrock)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

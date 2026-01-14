@@ -25,6 +25,18 @@ function getRepoRoot() {
   return path.resolve(here, "..");
 }
 
+function ensureExecutable(targetPath) {
+  if (process.platform === "win32") return;
+  if (!fs.existsSync(targetPath)) return;
+  try {
+    const mode = fs.statSync(targetPath).mode & 0o777;
+    if (mode & 0o100) return;
+    fs.chmodSync(targetPath, 0o755);
+  } catch (err) {
+    console.warn(`[postinstall] chmod failed: ${err}`);
+  }
+}
+
 function extractPackageName(key) {
   if (key.startsWith("@")) {
     const idx = key.indexOf("@", 1);
@@ -137,6 +149,26 @@ function writeFileLines(targetPath, lines, hadTrailingNewline) {
 
 function applyHunk(lines, hunk, offset) {
   let cursor = hunk.oldStart - 1 + offset;
+  const expected = [];
+  for (const raw of hunk.lines) {
+    const marker = raw[0];
+    if (marker === " " || marker === "+") {
+      expected.push(raw.slice(1));
+    }
+  }
+  if (cursor >= 0 && cursor + expected.length <= lines.length) {
+    let alreadyApplied = true;
+    for (let i = 0; i < expected.length; i += 1) {
+      if (lines[cursor + i] !== expected[i]) {
+        alreadyApplied = false;
+        break;
+      }
+    }
+    if (alreadyApplied) {
+      const delta = hunk.newLines - hunk.oldLines;
+      return offset + delta;
+    }
+  }
 
   for (const raw of hunk.lines) {
     const marker = raw[0];
@@ -212,6 +244,8 @@ function applyPatchFile({ patchPath, targetDir }) {
 function main() {
   const repoRoot = getRepoRoot();
   process.chdir(repoRoot);
+
+  ensureExecutable(path.join(repoRoot, "dist", "entry.js"));
 
   if (!shouldApplyPnpmPatchedDependenciesFallback()) {
     return;

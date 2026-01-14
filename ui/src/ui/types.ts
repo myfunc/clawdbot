@@ -1,13 +1,13 @@
-export type ProvidersStatusSnapshot = {
+export type ChannelsStatusSnapshot = {
   ts: number;
-  providerOrder: string[];
-  providerLabels: Record<string, string>;
-  providers: Record<string, unknown>;
-  providerAccounts: Record<string, ProviderAccountSnapshot[]>;
-  providerDefaultAccountId: Record<string, string>;
+  channelOrder: string[];
+  channelLabels: Record<string, string>;
+  channels: Record<string, unknown>;
+  channelAccounts: Record<string, ChannelAccountSnapshot[]>;
+  channelDefaultAccountId: Record<string, string>;
 };
 
-export type ProviderAccountSnapshot = {
+export type ChannelAccountSnapshot = {
   accountId: string;
   name?: string | null;
   enabled?: boolean | null;
@@ -350,9 +350,11 @@ export type CronJobState = {
 
 export type CronJob = {
   id: string;
+  agentId?: string;
   name: string;
   description?: string;
   enabled: boolean;
+  deleteAfterRun?: boolean;
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;

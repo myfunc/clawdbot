@@ -125,6 +125,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
   }
 
+  if (normalized === "chutes") {
+    return pick("CHUTES_OAUTH_TOKEN") ?? pick("CHUTES_API_KEY");
+  }
+
   if (normalized === "zai") {
     return pick("ZAI_API_KEY") ?? pick("Z_AI_API_KEY");
   }
@@ -146,7 +150,9 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     cerebras: "CEREBRAS_API_KEY",
     xai: "XAI_API_KEY",
     openrouter: "OPENROUTER_API_KEY",
+    moonshot: "MOONSHOT_API_KEY",
     minimax: "MINIMAX_API_KEY",
+    synthetic: "SYNTHETIC_API_KEY",
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
   };
