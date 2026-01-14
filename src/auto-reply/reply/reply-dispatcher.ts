@@ -45,6 +45,8 @@ export type ReplyDispatcherOptions = {
   onError?: ReplyDispatchErrorHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Fire-and-forget mode: deliver messages in parallel without chaining. */
+  parallel?: boolean;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<
@@ -53,12 +55,16 @@ export type ReplyDispatcherWithTypingOptions = Omit<
 > & {
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
+  /** Custom handler for tool results (edit-in-place progress messages). */
+  deliverToolResult?: (payload: ReplyPayload) => Promise<void> | void;
 };
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReplyDispatcher;
   replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController">;
   markDispatchIdle: () => void;
+  /** Custom tool result handler if provided in options. */
+  deliverToolResult?: (payload: ReplyPayload) => Promise<void> | void;
 };
 
 export type ReplyDispatcher = {
@@ -83,6 +89,8 @@ export function createReplyDispatcher(
   options: ReplyDispatcherOptions,
 ): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
+  // Track all in-flight promises for parallel mode waitForIdle.
+  const inFlightPromises: Promise<void>[] = [];
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   let pending = 0;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
@@ -101,18 +109,19 @@ export function createReplyDispatcher(
     pending += 1;
 
     // Determine if we should add human-like delay (only for block replies after the first).
-    const shouldDelay = kind === "block" && sentFirstBlock;
+    const shouldDelay = kind === "block" && sentFirstBlock && !options.parallel;
     if (kind === "block") sentFirstBlock = true;
 
-    sendChain = sendChain
-      .then(async () => {
-        // Add human-like delay between block replies for natural rhythm.
-        if (shouldDelay) {
-          const delayMs = getHumanDelay(options.humanDelay);
-          if (delayMs > 0) await sleep(delayMs);
-        }
-        await options.deliver(normalized, { kind });
-      })
+    const deliverPromise = (async () => {
+      // Add human-like delay between block replies for natural rhythm (sequential mode only).
+      if (shouldDelay) {
+        const delayMs = getHumanDelay(options.humanDelay);
+        if (delayMs > 0) await sleep(delayMs);
+      }
+      await options.deliver(normalized, { kind });
+    })();
+
+    const wrappedPromise = deliverPromise
       .catch((err) => {
         options.onError?.(err, { kind });
       })
@@ -122,14 +131,31 @@ export function createReplyDispatcher(
           options.onIdle?.();
         }
       });
+
+    if (options.parallel) {
+      // Fire-and-forget mode: track promise for waitForIdle but don't chain.
+      inFlightPromises.push(wrappedPromise);
+    } else {
+      // Sequential mode: chain deliveries to preserve order.
+      sendChain = sendChain.then(() => wrappedPromise);
+    }
     return true;
+  };
+
+  const waitForIdle = async () => {
+    if (options.parallel) {
+      // Wait for all in-flight promises to settle.
+      await Promise.all(inFlightPromises);
+    } else {
+      await sendChain;
+    }
   };
 
   return {
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
-    waitForIdle: () => sendChain,
+    waitForIdle,
     getQueuedCounts: () => ({ ...queuedCounts }),
   };
 }
@@ -137,7 +163,8 @@ export function createReplyDispatcher(
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { onReplyStart, onIdle, ...dispatcherOptions } = options;
+  const { onReplyStart, onIdle, deliverToolResult, ...dispatcherOptions } =
+    options;
   let typingController: TypingController | undefined;
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
@@ -146,6 +173,18 @@ export function createReplyDispatcherWithTyping(
       onIdle?.();
     },
   });
+
+  // Wrap deliverToolResult to apply normalization (responsePrefix, etc.)
+  const wrappedDeliverToolResult = deliverToolResult
+    ? (payload: ReplyPayload) => {
+        const normalized = normalizeReplyPayload(payload, {
+          responsePrefix: dispatcherOptions.responsePrefix,
+        });
+        if (normalized) {
+          return deliverToolResult(normalized);
+        }
+      }
+    : undefined;
 
   return {
     dispatcher,
@@ -159,5 +198,6 @@ export function createReplyDispatcherWithTyping(
       typingController?.markDispatchIdle();
       onIdle?.();
     },
+    deliverToolResult: wrappedDeliverToolResult,
   };
 }

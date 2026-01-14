@@ -74,8 +74,16 @@ export function createBlockReplyPipeline(params: {
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
+  /** Fire-and-forget mode: deliver messages in parallel without chaining. */
+  parallel?: boolean;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+  const {
+    onBlockReply,
+    timeoutMs,
+    coalescing,
+    buffer,
+    parallel = false,
+  } = params;
   const sentKeys = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
@@ -83,6 +91,8 @@ export function createBlockReplyPipeline(params: {
   const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
   let sendChain: Promise<void> = Promise.resolve();
+  // Track all in-flight promises for parallel mode flush.
+  const inFlightPromises: Promise<void>[] = [];
   let aborted = false;
   let didStream = false;
   let didLogTimeout = false;
@@ -101,19 +111,21 @@ export function createBlockReplyPipeline(params: {
       `block reply delivery timed out after ${timeoutMs}ms`,
     );
     const abortController = new AbortController();
-    sendChain = sendChain
-      .then(async () => {
-        if (aborted) return false;
-        await withTimeout(
-          onBlockReply(payload, {
-            abortSignal: abortController.signal,
-            timeoutMs,
-          }) ?? Promise.resolve(),
+
+    const deliverPromise = (async () => {
+      if (aborted) return false;
+      await withTimeout(
+        onBlockReply(payload, {
+          abortSignal: abortController.signal,
           timeoutMs,
-          timeoutError,
-        );
-        return true;
-      })
+        }) ?? Promise.resolve(),
+        timeoutMs,
+        timeoutError,
+      );
+      return true;
+    })();
+
+    const wrappedPromise = deliverPromise
       .then((didSend) => {
         if (!didSend) return;
         sentKeys.add(payloadKey);
@@ -136,6 +148,14 @@ export function createBlockReplyPipeline(params: {
       .finally(() => {
         pendingKeys.delete(payloadKey);
       });
+
+    if (parallel) {
+      // Fire-and-forget mode: track promise for flush but don't chain.
+      inFlightPromises.push(wrappedPromise);
+    } else {
+      // Sequential mode: chain deliveries to preserve order.
+      sendChain = sendChain.then(() => wrappedPromise);
+    }
   };
 
   const coalescer = coalescing
@@ -206,7 +226,12 @@ export function createBlockReplyPipeline(params: {
   const flush = async (options?: { force?: boolean }) => {
     await coalescer?.flush(options);
     flushBuffered();
-    await sendChain;
+    if (parallel) {
+      // Wait for all in-flight promises to settle.
+      await Promise.all(inFlightPromises);
+    } else {
+      await sendChain;
+    }
   };
 
   const stop = () => {

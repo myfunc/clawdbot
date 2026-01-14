@@ -70,6 +70,7 @@ import {
   readTelegramAllowFromStore,
   upsertTelegramPairingRequest,
 } from "./pairing-store.js";
+import { TelegramToolProgressMessage } from "./tool-progress.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 const PARSE_ERR_RE =
@@ -211,7 +212,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     : undefined;
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
-  bot.api.config.use(apiThrottler());
+  // Configure throttler with higher limits for faster delivery while staying safe
+  // maxConcurrent: parallel requests, minTime: minimum ms between requests
+  bot.api.config.use(
+    apiThrottler({
+      global: { maxConcurrent: 5, minTime: 50 },
+      out: { maxConcurrent: 3, minTime: 30 },
+    }),
+  );
   bot.use(sequentialize(getTelegramSequentialKey));
 
   const recentUpdates = createTelegramUpdateDedupe();
@@ -838,6 +846,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ? !telegramCfg.blockStreaming
         : undefined);
 
+    // Create tool progress message for edit-in-place tool results
+    const toolProgress = new TelegramToolProgressMessage(
+      bot,
+      String(chatId),
+      messageThreadId,
+    );
+
     let didSendReply = false;
     const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -845,6 +860,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       dispatcherOptions: {
         responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
           .responsePrefix,
+        parallel: true, // Enable parallel mode for faster Telegram delivery
         deliver: async (payload, info) => {
           if (info.kind === "final") {
             await flushDraft();
@@ -859,8 +875,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             replyToMode,
             textLimit,
             messageThreadId,
+            parallel: true, // Enable parallel chunk sending
           });
           didSendReply = true;
+        },
+        deliverToolResult: async (payload) => {
+          // Append tool results to a single progress message (edit-in-place)
+          await toolProgress.append(payload.text || "");
         },
         onError: (err, info) => {
           runtime.error?.(
@@ -1271,9 +1292,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             mediaGroupBuffer.delete(mediaGroupId);
             mediaGroupProcessing = mediaGroupProcessing
               .then(async () => {
-                await processMediaGroup(existing);
+                await processMediaGroup(existing, chatId);
               })
-              .catch(() => undefined);
+              .catch((err) => {
+                runtime.error?.(
+                  danger(`media group processing failed: ${String(err)}`),
+                );
+              });
             await mediaGroupProcessing;
           }, MEDIA_GROUP_TIMEOUT_MS);
         } else {
@@ -1283,9 +1308,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               mediaGroupBuffer.delete(mediaGroupId);
               mediaGroupProcessing = mediaGroupProcessing
                 .then(async () => {
-                  await processMediaGroup(entry);
+                  await processMediaGroup(entry, chatId);
                 })
-                .catch(() => undefined);
+                .catch((err) => {
+                  runtime.error?.(
+                    danger(`media group processing failed: ${String(err)}`),
+                  );
+                });
               await mediaGroupProcessing;
             }, MEDIA_GROUP_TIMEOUT_MS),
           };
@@ -1327,7 +1356,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
-  const processMediaGroup = async (entry: MediaGroupEntry) => {
+  const processMediaGroup = async (entry: MediaGroupEntry, chatId: number) => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
@@ -1337,22 +1366,66 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const primaryEntry = captionMsg ?? entry.messages[0];
 
       const allMedia: Array<{ path: string; contentType?: string }> = [];
+      let failedCount = 0;
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(
-          ctx,
-          mediaMaxBytes,
-          opts.token,
-          opts.proxyFetch,
-        );
-        if (media) {
-          allMedia.push({ path: media.path, contentType: media.contentType });
+        try {
+          const media = await resolveMedia(
+            ctx,
+            mediaMaxBytes,
+            opts.token,
+            opts.proxyFetch,
+          );
+          if (media) {
+            allMedia.push({ path: media.path, contentType: media.contentType });
+          }
+        } catch (mediaErr) {
+          failedCount += 1;
+          const errMsg = String(mediaErr);
+          logger.warn(
+            { chatId, error: errMsg },
+            "media group item failed to download",
+          );
         }
+      }
+
+      // Notify user if some files failed (likely too large)
+      if (failedCount > 0 && allMedia.length === 0) {
+        const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+        await bot.api
+          .sendMessage(
+            chatId,
+            `⚠️ Could not process ${failedCount} file(s). Files may exceed the ${limitMb}MB limit or Telegram's 20MB bot download limit.`,
+            { reply_to_message_id: primaryEntry.msg.message_id },
+          )
+          .catch(() => {});
+        return;
+      }
+      if (failedCount > 0) {
+        const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+        await bot.api
+          .sendMessage(
+            chatId,
+            `⚠️ ${failedCount} file(s) skipped (may exceed ${limitMb}MB limit). Processing ${allMedia.length} remaining.`,
+            { reply_to_message_id: primaryEntry.msg.message_id },
+          )
+          .catch(() => {});
       }
 
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
+      // Notify user about the failure
+      const primaryMsg = entry.messages[0]?.msg;
+      if (primaryMsg) {
+        await bot.api
+          .sendMessage(
+            chatId,
+            "⚠️ Failed to process media group. Please try sending files one at a time.",
+            { reply_to_message_id: primaryMsg.message_id },
+          )
+          .catch(() => {});
+      }
     }
   };
 
@@ -1375,6 +1448,7 @@ async function deliverReplies(params: {
   replyToMode: ReplyToMode;
   textLimit: number;
   messageThreadId?: number;
+  parallel?: boolean;
 }) {
   const {
     replies,
@@ -1384,9 +1458,13 @@ async function deliverReplies(params: {
     replyToMode,
     textLimit,
     messageThreadId,
+    parallel = false,
   } = params;
   const threadParams = buildTelegramThreadParams(messageThreadId);
-  let hasReplied = false;
+
+  // Collect all send operations
+  const sendOperations: Array<() => Promise<void>> = [];
+
   for (const reply of replies) {
     if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
       runtime.error?.(danger("reply missing text/media"));
@@ -1402,82 +1480,90 @@ async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     if (mediaList.length === 0) {
-      for (const chunk of chunkMarkdownText(reply.text || "", textLimit)) {
-        await sendTelegramText(bot, chatId, chunk, runtime, {
-          replyToMessageId:
-            replyToId && (replyToMode === "all" || !hasReplied)
-              ? replyToId
-              : undefined,
-          messageThreadId,
+      const chunks = chunkMarkdownText(reply.text || "", textLimit);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const isFirst = i === 0;
+        sendOperations.push(async () => {
+          await sendTelegramText(bot, chatId, chunk, runtime, {
+            replyToMessageId:
+              replyToId && (replyToMode === "all" || isFirst)
+                ? replyToId
+                : undefined,
+            messageThreadId,
+          });
         });
-        if (replyToId && !hasReplied) {
-          hasReplied = true;
-        }
       }
       continue;
     }
     // media with optional caption on first item
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const media = await loadWebMedia(mediaUrl);
-      const kind = mediaKindFromMime(media.contentType ?? undefined);
-      const isGif = isGifMedia({
-        contentType: media.contentType,
-        fileName: media.fileName,
-      });
-      const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
-      const file = new InputFile(media.buffer, fileName);
-      const caption = first ? (reply.text ?? undefined) : undefined;
-      first = false;
+    for (let i = 0; i < mediaList.length; i++) {
+      const mediaUrl = mediaList[i];
+      const isFirst = i === 0;
+      const caption = isFirst ? (reply.text ?? undefined) : undefined;
       const replyToMessageId =
-        replyToId && (replyToMode === "all" || !hasReplied)
-          ? replyToId
-          : undefined;
-      const mediaParams: Record<string, unknown> = {
-        caption,
-        reply_to_message_id: replyToMessageId,
-      };
-      if (threadParams) {
-        mediaParams.message_thread_id = threadParams.message_thread_id;
-      }
-      if (isGif) {
-        await bot.api.sendAnimation(chatId, file, {
-          ...mediaParams,
-        });
-      } else if (kind === "image") {
-        await bot.api.sendPhoto(chatId, file, {
-          ...mediaParams,
-        });
-      } else if (kind === "video") {
-        await bot.api.sendVideo(chatId, file, {
-          ...mediaParams,
-        });
-      } else if (kind === "audio") {
-        const { useVoice } = resolveTelegramVoiceSend({
-          wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
+        replyToId && (replyToMode === "all" || isFirst) ? replyToId : undefined;
+      sendOperations.push(async () => {
+        const media = await loadWebMedia(mediaUrl);
+        const kind = mediaKindFromMime(media.contentType ?? undefined);
+        const isGif = isGifMedia({
           contentType: media.contentType,
-          fileName,
-          logFallback: logVerbose,
+          fileName: media.fileName,
         });
-        if (useVoice) {
-          // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
-          await bot.api.sendVoice(chatId, file, {
+        const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
+        const file = new InputFile(media.buffer, fileName);
+        const mediaParams: Record<string, unknown> = {
+          caption,
+          reply_to_message_id: replyToMessageId,
+        };
+        if (threadParams) {
+          mediaParams.message_thread_id = threadParams.message_thread_id;
+        }
+        if (isGif) {
+          await bot.api.sendAnimation(chatId, file, {
             ...mediaParams,
           });
+        } else if (kind === "image") {
+          await bot.api.sendPhoto(chatId, file, {
+            ...mediaParams,
+          });
+        } else if (kind === "video") {
+          await bot.api.sendVideo(chatId, file, {
+            ...mediaParams,
+          });
+        } else if (kind === "audio") {
+          const { useVoice } = resolveTelegramVoiceSend({
+            wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
+            contentType: media.contentType,
+            fileName,
+            logFallback: logVerbose,
+          });
+          if (useVoice) {
+            // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
+            await bot.api.sendVoice(chatId, file, {
+              ...mediaParams,
+            });
+          } else {
+            // Audio file - displays with metadata (title, duration) - DEFAULT
+            await bot.api.sendAudio(chatId, file, {
+              ...mediaParams,
+            });
+          }
         } else {
-          // Audio file - displays with metadata (title, duration) - DEFAULT
-          await bot.api.sendAudio(chatId, file, {
+          await bot.api.sendDocument(chatId, file, {
             ...mediaParams,
           });
         }
-      } else {
-        await bot.api.sendDocument(chatId, file, {
-          ...mediaParams,
-        });
-      }
-      if (replyToId && !hasReplied) {
-        hasReplied = true;
-      }
+      });
+    }
+  }
+
+  // Execute all send operations - parallel or sequential based on flag
+  if (parallel) {
+    await Promise.all(sendOperations.map((op) => op()));
+  } else {
+    for (const op of sendOperations) {
+      await op();
     }
   }
 }

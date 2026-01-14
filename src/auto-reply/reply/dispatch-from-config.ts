@@ -17,10 +17,12 @@ export async function dispatchReplyFromConfig(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
   dispatcher: ReplyDispatcher;
+  /** Custom handler for tool results (edit-in-place progress messages). */
+  deliverToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
-  const { ctx, cfg, dispatcher } = params;
+  const { ctx, cfg, dispatcher, deliverToolResult } = params;
 
   if (shouldSkipDuplicateInbound(ctx)) {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
@@ -111,6 +113,9 @@ export async function dispatchReplyFromConfig(params: {
         if (shouldRouteToOriginating) {
           // Fire-and-forget for streaming tool results when routing.
           void sendPayloadAsync(payload);
+        } else if (deliverToolResult) {
+          // Custom tool result handler (e.g., edit-in-place progress messages).
+          void deliverToolResult(payload);
         } else {
           // Synchronous dispatch to preserve callback timing.
           dispatcher.sendToolResult(payload);
