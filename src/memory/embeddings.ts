@@ -1,6 +1,7 @@
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type EmbeddingProvider = {
   id: string;
@@ -34,8 +35,7 @@ export type EmbeddingProviderOptions = {
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_LOCAL_MODEL =
-  "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
+const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
 
 function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
@@ -60,14 +60,9 @@ async function createOpenAiEmbeddingProvider(
       });
 
   const providerConfig = options.config.models?.providers?.openai;
-  const baseUrl =
-    remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
+  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
   const url = `${baseUrl.replace(/\/$/, "")}/embeddings`;
-  const headerOverrides = Object.assign(
-    {},
-    providerConfig?.headers,
-    remote?.headers,
-  );
+  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
@@ -111,9 +106,7 @@ async function createLocalEmbeddingProvider(
   const modelCacheDir = options.local?.modelCacheDir?.trim();
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
-  const { getLlama, resolveModelFile, LlamaLogLevel } = await import(
-    "node-llama-cpp"
-  );
+  const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
 
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
@@ -124,10 +117,7 @@ async function createLocalEmbeddingProvider(
       llama = await getLlama({ logLevel: LlamaLogLevel.error });
     }
     if (!embeddingModel) {
-      const resolved = await resolveModelFile(
-        modelPath,
-        modelCacheDir || undefined,
-      );
+      const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
       embeddingModel = await llama.loadModel({ modelPath: resolved });
     }
     if (!embeddingContext) {
@@ -177,9 +167,7 @@ export async function createEmbeddingProvider(
             fallbackReason: reason,
           };
         } catch (fallbackErr) {
-          throw new Error(
-            `${reason}\n\nFallback to OpenAI failed: ${formatError(fallbackErr)}`,
-          );
+          throw new Error(`${reason}\n\nFallback to OpenAI failed: ${formatError(fallbackErr)}`);
         }
       }
       throw new Error(reason);
@@ -194,15 +182,32 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
+function isNodeLlamaCppMissing(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as Error & { code?: unknown }).code;
+  if (code === "ERR_MODULE_NOT_FOUND") {
+    return err.message.includes("node-llama-cpp");
+  }
+  return false;
+}
+
 function formatLocalSetupError(err: unknown): string {
   const detail = formatError(err);
+  const missing = isNodeLlamaCppMissing(err);
   return [
     "Local embeddings unavailable.",
-    detail ? `Reason: ${detail}` : undefined,
+    missing
+      ? "Reason: optional dependency node-llama-cpp is missing (or failed to install)."
+      : detail
+        ? `Reason: ${detail}`
+        : undefined,
+    missing && detail ? `Detail: ${detail}` : null,
     "To enable local embeddings:",
-    "1) pnpm approve-builds",
-    "2) select node-llama-cpp",
-    "3) pnpm rebuild node-llama-cpp",
+    "1) Use Node 22 LTS (recommended for installs/updates)",
+    missing
+      ? "2) Reinstall Clawdbot (this should install node-llama-cpp): npm i -g clawdbot@latest"
+      : null,
+    "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
     'Or set agents.defaults.memorySearch.provider = "openai" (remote).',
   ]
     .filter(Boolean)

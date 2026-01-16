@@ -39,9 +39,7 @@ export async function dispatchReplyFromConfig(params: {
   const originatingTo = ctx.OriginatingTo;
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
   const shouldRouteToOriginating =
-    isRoutableChannel(originatingChannel) &&
-    originatingTo &&
-    originatingChannel !== currentSurface;
+    isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -68,9 +66,7 @@ export async function dispatchReplyFromConfig(params: {
       abortSignal,
     });
     if (!result.ok) {
-      logVerbose(
-        `dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`,
-      );
+      logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
   };
 
@@ -134,11 +130,7 @@ export async function dispatchReplyFromConfig(params: {
     cfg,
   );
 
-  const replies = replyResult
-    ? Array.isArray(replyResult)
-      ? replyResult
-      : [replyResult]
-    : [];
+  const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
   let queuedFinal = false;
   let routedFinalCount = 0;

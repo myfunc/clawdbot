@@ -1,7 +1,9 @@
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
+// Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
+// Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 export const HEARTBEAT_PROMPT =
-  "Consider outstanding tasks and HEARTBEAT.md guidance from the workspace context (if present). Checkup sometimes on your human during (user local) day time.";
+  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
@@ -54,9 +56,7 @@ export function stripHeartbeatToken(
   const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
   const parsedAckChars =
-    typeof maxAckCharsRaw === "string"
-      ? Number(maxAckCharsRaw)
-      : maxAckCharsRaw;
+    typeof maxAckCharsRaw === "string" ? Number(maxAckCharsRaw) : maxAckCharsRaw;
   const maxAckChars = Math.max(
     0,
     typeof parsedAckChars === "number" && Number.isFinite(parsedAckChars)
@@ -77,9 +77,7 @@ export function stripHeartbeatToken(
       .replace(/[*`~_]+$/, "");
 
   const trimmedNormalized = stripMarkup(trimmed);
-  const hasToken =
-    trimmed.includes(HEARTBEAT_TOKEN) ||
-    trimmedNormalized.includes(HEARTBEAT_TOKEN);
+  const hasToken = trimmed.includes(HEARTBEAT_TOKEN) || trimmedNormalized.includes(HEARTBEAT_TOKEN);
   if (!hasToken) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
@@ -87,9 +85,7 @@ export function stripHeartbeatToken(
   const strippedOriginal = stripTokenAtEdges(trimmed);
   const strippedNormalized = stripTokenAtEdges(trimmedNormalized);
   const picked =
-    strippedOriginal.didStrip && strippedOriginal.text
-      ? strippedOriginal
-      : strippedNormalized;
+    strippedOriginal.didStrip && strippedOriginal.text ? strippedOriginal : strippedNormalized;
   if (!picked.didStrip) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }

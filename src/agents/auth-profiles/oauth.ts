@@ -1,8 +1,4 @@
-import {
-  getOAuthApiKey,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@mariozechner/pi-ai";
+import { getOAuthApiKey, type OAuthCredentials, type OAuthProvider } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -15,12 +11,8 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
-function buildOAuthApiKey(
-  provider: string,
-  credentials: OAuthCredentials,
-): string {
-  const needsProjectId =
-    provider === "google-gemini-cli" || provider === "google-antigravity";
+function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): string {
+  const needsProjectId = provider === "google-gemini-cli" || provider === "google-antigravity";
   return needsProjectId
     ? JSON.stringify({
         token: credentials.access,
@@ -74,12 +66,9 @@ async function refreshOAuthTokenWithLock(params: {
     };
     saveAuthProfileStore(store, params.agentDir);
 
-    // Sync refreshed credentials back to Claude CLI if this is the claude-cli profile
+    // Sync refreshed credentials back to Claude Code CLI if this is the claude-cli profile
     // This ensures Claude Code continues to work after ClawdBot refreshes the token
-    if (
-      params.profileId === CLAUDE_CLI_PROFILE_ID &&
-      cred.provider === "anthropic"
-    ) {
+    if (params.profileId === CLAUDE_CLI_PROFILE_ID && cred.provider === "anthropic") {
       writeClaudeCliCredentials(result.newCredentials);
     }
 

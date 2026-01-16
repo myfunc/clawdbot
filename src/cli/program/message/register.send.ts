@@ -1,10 +1,7 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessageSendCommand(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessageSendCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
       helpers
@@ -12,7 +9,7 @@ export function registerMessageSendCommand(
           message
             .command("send")
             .description("Send a message")
-            .requiredOption("-m, --message <text>", "Message body"),
+            .option("-m, --message <text>", "Message body (required unless --media is set)"),
         )
         .option(
           "--media <path-or-url>",
@@ -24,11 +21,7 @@ export function registerMessageSendCommand(
         )
         .option("--reply-to <id>", "Reply-to message id")
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
-        .option(
-          "--gif-playback",
-          "Treat video media as GIF playback (WhatsApp only).",
-          false,
-        ),
+        .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false),
     )
     .action(async (opts) => {
       await helpers.runMessageAction("send", opts);

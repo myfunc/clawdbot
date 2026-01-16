@@ -1,16 +1,15 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type {
-  ReasoningLevel,
-  VerboseLevel,
-} from "../../../auto-reply/thinking.js";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../../../auto-reply/tokens.js";
+import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
-import { formatAssistantErrorText } from "../../pi-embedded-helpers.js";
+import {
+  formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
+  isRawApiErrorPayload,
+  normalizeTextForComparison,
+} from "../../pi-embedded-helpers.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -48,18 +47,28 @@ export function buildEmbeddedRunPayloads(params: {
     replyToCurrent?: boolean;
   }> = [];
 
+  const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText = params.lastAssistant
     ? formatAssistantErrorText(params.lastAssistant, {
         cfg: params.config,
         sessionKey: params.sessionKey,
       })
     : undefined;
+  const rawErrorMessage = lastAssistantErrored
+    ? params.lastAssistant?.errorMessage?.trim() || undefined
+    : undefined;
+  const rawErrorFingerprint = rawErrorMessage
+    ? getApiErrorPayloadFingerprint(rawErrorMessage)
+    : null;
+  const normalizedRawErrorText = rawErrorMessage
+    ? normalizeTextForComparison(rawErrorMessage)
+    : null;
+  const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
+  const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) replyItems.push({ text: errorText, isError: true });
 
   const inlineToolResults =
-    params.inlineToolResultsAllowed &&
-    params.verboseLevel === "on" &&
-    params.toolMetas.length > 0;
+    params.inlineToolResultsAllowed && params.verboseLevel === "on" && params.toolMetas.length > 0;
   if (inlineToolResults) {
     for (const { toolName, meta } of params.toolMetas) {
       const agg = formatToolAggregate(toolName, meta ? [meta] : []);
@@ -90,14 +99,34 @@ export function buildEmbeddedRunPayloads(params: {
       : "";
   if (reasoningText) replyItems.push({ text: reasoningText });
 
-  const fallbackAnswerText = params.lastAssistant
-    ? extractAssistantText(params.lastAssistant)
-    : "";
-  const answerTexts = params.assistantTexts.length
-    ? params.assistantTexts
-    : fallbackAnswerText
-      ? [fallbackAnswerText]
-      : [];
+  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const shouldSuppressRawErrorText = (text: string) => {
+    if (!lastAssistantErrored) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    if (errorText) {
+      const normalized = normalizeTextForComparison(trimmed);
+      if (normalized && normalizedErrorText && normalized === normalizedErrorText) return true;
+      if (trimmed === genericErrorText) return true;
+    }
+    if (rawErrorMessage && trimmed === rawErrorMessage) return true;
+    if (normalizedRawErrorText) {
+      const normalized = normalizeTextForComparison(trimmed);
+      if (normalized && normalized === normalizedRawErrorText) return true;
+    }
+    if (rawErrorFingerprint) {
+      const fingerprint = getApiErrorPayloadFingerprint(trimmed);
+      if (fingerprint && fingerprint === rawErrorFingerprint) return true;
+    }
+    return isRawApiErrorPayload(trimmed);
+  };
+  const answerTexts = (
+    params.assistantTexts.length
+      ? params.assistantTexts
+      : fallbackAnswerText
+        ? [fallbackAnswerText]
+        : []
+  ).filter((text) => !shouldSuppressRawErrorText(text));
 
   for (const text of answerTexts) {
     const {
@@ -108,11 +137,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (
-      !cleanedText &&
-      (!mediaUrls || mediaUrls.length === 0) &&
-      !audioAsVoice
-    ) {
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
     replyItems.push({
@@ -135,12 +160,10 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
-      audioAsVoice:
-        item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0))
-        return false;
+      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) return false;
       if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) return false;
       return true;
     });

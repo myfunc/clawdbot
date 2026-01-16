@@ -1,11 +1,8 @@
-import { chunkMarkdownText } from "../../auto-reply/chunk.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
 
 export async function deliverReplies(params: {
@@ -17,25 +14,20 @@ export async function deliverReplies(params: {
   textLimit: number;
   replyThreadTs?: string;
 }) {
-  const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
     const threadTs = payload.replyToId ?? params.replyThreadTs;
-    const mediaList =
-      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) continue;
 
     if (mediaList.length === 0) {
-      for (const chunk of chunkMarkdownText(text, chunkLimit)) {
-        const trimmed = chunk.trim();
-        if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN))
-          continue;
-        await sendMessageSlack(params.target, trimmed, {
-          token: params.token,
-          threadTs,
-          accountId: params.accountId,
-        });
-      }
+      const trimmed = text.trim();
+      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) continue;
+      await sendMessageSlack(params.target, trimmed, {
+        token: params.token,
+        threadTs,
+        accountId: params.accountId,
+      });
     } else {
       let first = true;
       for (const mediaUrl of mediaList) {
@@ -129,20 +121,13 @@ export async function deliverSlackSlashReplies(params: {
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
     const textRaw = payload.text?.trim() ?? "";
-    const text =
-      textRaw && !isSilentReplyText(textRaw, SILENT_REPLY_TOKEN)
-        ? textRaw
-        : undefined;
-    const mediaList =
-      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const combined = [
-      text ?? "",
-      ...mediaList.map((url) => url.trim()).filter(Boolean),
-    ]
+    const text = textRaw && !isSilentReplyText(textRaw, SILENT_REPLY_TOKEN) ? textRaw : undefined;
+    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const combined = [text ?? "", ...mediaList.map((url) => url.trim()).filter(Boolean)]
       .filter(Boolean)
       .join("\n");
     if (!combined) continue;
-    for (const chunk of chunkMarkdownText(combined, chunkLimit)) {
+    for (const chunk of markdownToSlackMrkdwnChunks(combined, chunkLimit)) {
       messages.push(chunk);
     }
   }

@@ -1,7 +1,12 @@
 import {
   resolveEffectiveMessagesConfig,
   resolveHumanDelayConfig,
+  resolveIdentityName,
 } from "../../../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../../auto-reply/reply/response-prefix-template.js";
 import { dispatchReplyFromConfig } from "../../../auto-reply/reply/dispatch-from-config.js";
 import { clearHistoryEntries } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
@@ -14,9 +19,7 @@ import { createSlackReplyDeliveryPlan, deliverReplies } from "../replies.js";
 
 import type { PreparedSlackMessage } from "./types.js";
 
-export async function dispatchPreparedSlackMessage(
-  prepared: PreparedSlackMessage,
-) {
+export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -64,39 +67,42 @@ export async function dispatchPreparedSlackMessage(
   };
 
   let didSendReply = false;
-  const { dispatcher, replyOptions, markDispatchIdle } =
-    createReplyDispatcherWithTyping({
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-        .responsePrefix,
-      humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-      deliver: async (payload) => {
-        const replyThreadTs = replyPlan.nextThreadTs();
-        await deliverReplies({
-          replies: [payload],
-          target: prepared.replyTarget,
-          token: ctx.botToken,
-          accountId: account.accountId,
-          runtime,
-          textLimit: ctx.textLimit,
-          replyThreadTs,
+
+  // Create mutable context for response prefix template interpolation
+  let prefixContext: ResponsePrefixContext = {
+    identityName: resolveIdentityName(cfg, route.agentId),
+  };
+
+  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+    responsePrefixContextProvider: () => prefixContext,
+    humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+    deliver: async (payload) => {
+      const replyThreadTs = replyPlan.nextThreadTs();
+      await deliverReplies({
+        replies: [payload],
+        target: prepared.replyTarget,
+        token: ctx.botToken,
+        accountId: account.accountId,
+        runtime,
+        textLimit: ctx.textLimit,
+        replyThreadTs,
+      });
+      didSendReply = true;
+      replyPlan.markSent();
+    },
+    onError: (err, info) => {
+      runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
+      if (didSetStatus) {
+        void ctx.setSlackThreadStatus({
+          channelId: message.channel,
+          threadTs: statusThreadTs,
+          status: "",
         });
-        didSendReply = true;
-        replyPlan.markSent();
-      },
-      onError: (err, info) => {
-        runtime.error?.(
-          danger(`slack ${info.kind} reply failed: ${String(err)}`),
-        );
-        if (didSetStatus) {
-          void ctx.setSlackThreadStatus({
-            channelId: message.channel,
-            threadTs: statusThreadTs,
-            status: "",
-          });
-        }
-      },
-      onReplyStart,
-    });
+      }
+    },
+    onReplyStart,
+  });
 
   const { queuedFinal, counts } = await dispatchReplyFromConfig({
     ctx: prepared.ctxPayload,
@@ -110,6 +116,13 @@ export async function dispatchPreparedSlackMessage(
         typeof account.config.blockStreaming === "boolean"
           ? !account.config.blockStreaming
           : undefined,
+      onModelSelected: (ctx) => {
+        // Mutate the object directly instead of reassigning to ensure the closure sees updates
+        prefixContext.provider = ctx.provider;
+        prefixContext.model = extractShortModelName(ctx.model);
+        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+      },
     },
   });
   markDispatchIdle();
@@ -139,11 +152,7 @@ export async function dispatchPreparedSlackMessage(
     );
   }
 
-  if (
-    ctx.removeAckAfterReply &&
-    prepared.ackReactionPromise &&
-    prepared.ackReactionMessageTs
-  ) {
+  if (ctx.removeAckAfterReply && prepared.ackReactionPromise && prepared.ackReactionMessageTs) {
     const messageTs = prepared.ackReactionMessageTs;
     const ackValue = prepared.ackReactionValue;
     void prepared.ackReactionPromise.then((didAck) => {

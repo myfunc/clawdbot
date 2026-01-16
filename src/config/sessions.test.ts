@@ -12,14 +12,13 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
   updateLastRoute,
+  updateSessionStore,
   updateSessionStoreEntry,
 } from "./sessions.js";
 
 describe("sessions", () => {
   it("returns normalized per-sender key", () => {
-    expect(deriveSessionKey("per-sender", { From: "whatsapp:+1555" })).toBe(
-      "+1555",
-    );
+    expect(deriveSessionKey("per-sender", { From: "whatsapp:+1555" })).toBe("+1555");
   });
 
   it("falls back to unknown when sender missing", () => {
@@ -31,9 +30,7 @@ describe("sessions", () => {
   });
 
   it("keeps group chats distinct", () => {
-    expect(deriveSessionKey("per-sender", { From: "12345-678@g.us" })).toBe(
-      "group:12345-678@g.us",
-    );
+    expect(deriveSessionKey("per-sender", { From: "12345-678@g.us" })).toBe("group:12345-678@g.us");
   });
 
   it("prefixes group keys with provider when available", () => {
@@ -48,11 +45,7 @@ describe("sessions", () => {
 
   it("keeps explicit provider when provided in group key", () => {
     expect(
-      resolveSessionKey(
-        "per-sender",
-        { From: "group:discord:12345", ChatType: "group" },
-        "main",
-      ),
+      resolveSessionKey("per-sender", { From: "group:discord:12345", ChatType: "group" }, "main"),
     ).toBe("agent:main:discord:group:12345");
   });
 
@@ -69,9 +62,7 @@ describe("sessions", () => {
   });
 
   it("collapses direct chats to main by default", () => {
-    expect(resolveSessionKey("per-sender", { From: "+1555" })).toBe(
-      "agent:main:main",
-    );
+    expect(resolveSessionKey("per-sender", { From: "+1555" })).toBe("agent:main:main");
   });
 
   it("collapses direct chats to main even when sender missing", () => {
@@ -79,9 +70,9 @@ describe("sessions", () => {
   });
 
   it("maps direct chats to main key when provided", () => {
-    expect(
-      resolveSessionKey("per-sender", { From: "whatsapp:+1555" }, "main"),
-    ).toBe("agent:main:main");
+    expect(resolveSessionKey("per-sender", { From: "whatsapp:+1555" }, "main")).toBe(
+      "agent:main:main",
+    );
   });
 
   it("uses custom main key when provided", () => {
@@ -95,9 +86,9 @@ describe("sessions", () => {
   });
 
   it("leaves groups untouched even with main key", () => {
-    expect(
-      resolveSessionKey("per-sender", { From: "12345-678@g.us" }, "main"),
-    ).toBe("agent:main:group:12345-678@g.us");
+    expect(resolveSessionKey("per-sender", { From: "12345-678@g.us" }, "main")).toBe(
+      "agent:main:group:12345-678@g.us",
+    );
   });
 
   it("updateLastRoute persists channel and target", async () => {
@@ -147,6 +138,56 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.compactionCount).toBe(2);
   });
 
+  it("updateSessionStore preserves concurrent additions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+
+    await Promise.all([
+      updateSessionStore(storePath, (store) => {
+        store["agent:main:one"] = { sessionId: "sess-1", updatedAt: 1 };
+      }),
+      updateSessionStore(storePath, (store) => {
+        store["agent:main:two"] = { sessionId: "sess-2", updatedAt: 2 };
+      }),
+    ]);
+
+    const store = loadSessionStore(storePath);
+    expect(store["agent:main:one"]?.sessionId).toBe("sess-1");
+    expect(store["agent:main:two"]?.sessionId).toBe("sess-2");
+  });
+
+  it("updateSessionStore keeps deletions when concurrent writes happen", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:old": { sessionId: "sess-old", updatedAt: 1 },
+          "agent:main:keep": { sessionId: "sess-keep", updatedAt: 2 },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await Promise.all([
+      updateSessionStore(storePath, (store) => {
+        delete store["agent:main:old"];
+      }),
+      updateSessionStore(storePath, (store) => {
+        store["agent:main:new"] = { sessionId: "sess-new", updatedAt: 3 };
+      }),
+    ]);
+
+    const store = loadSessionStore(storePath);
+    expect(store["agent:main:old"]).toBeUndefined();
+    expect(store["agent:main:keep"]?.sessionId).toBe("sess-keep");
+    expect(store["agent:main:new"]?.sessionId).toBe("sess-new");
+  });
+
   it("loadSessionStore auto-migrates legacy provider keys to channel keys", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
@@ -169,10 +210,7 @@ describe("sessions", () => {
       "utf-8",
     );
 
-    const store = loadSessionStore(storePath) as unknown as Record<
-      string,
-      Record<string, unknown>
-    >;
+    const store = loadSessionStore(storePath) as unknown as Record<string, Record<string, unknown>>;
     const entry = store[mainSessionKey] ?? {};
     expect(entry.channel).toBe("slack");
     expect(entry.provider).toBeUndefined();
@@ -185,19 +223,7 @@ describe("sessions", () => {
       { CLAWDBOT_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
       () => "/home/ignored",
     );
-    expect(dir).toBe(
-      path.join(path.resolve("/custom/state"), "agents", "main", "sessions"),
-    );
-  });
-
-  it("falls back to CLAWDIS_STATE_DIR for session transcripts dir", () => {
-    const dir = resolveSessionTranscriptsDir(
-      { CLAWDIS_STATE_DIR: "/legacy/state" } as NodeJS.ProcessEnv,
-      () => "/home/ignored",
-    );
-    expect(dir).toBe(
-      path.join(path.resolve("/legacy/state"), "agents", "main", "sessions"),
-    );
+    expect(dir).toBe(path.join(path.resolve("/custom/state"), "agents", "main", "sessions"));
   });
 
   it("includes topic ids in session transcript filenames", () => {
@@ -231,13 +257,7 @@ describe("sessions", () => {
         agentId: "codex",
       });
       expect(sessionFile).toBe(
-        path.join(
-          path.resolve("/custom/state"),
-          "agents",
-          "codex",
-          "sessions",
-          "sess-2.jsonl",
-        ),
+        path.join(path.resolve("/custom/state"), "agents", "codex", "sessions", "sess-2.jsonl"),
       );
     } finally {
       if (prev === undefined) {
@@ -289,9 +309,7 @@ describe("sessions", () => {
     ]);
 
     const store = loadSessionStore(storePath);
-    expect(store[mainSessionKey]?.modelOverride).toBe(
-      "anthropic/claude-opus-4-5",
-    );
+    expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
     await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });

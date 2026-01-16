@@ -5,18 +5,15 @@ import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import {
-  normalizeCommandBody,
-  shouldHandleTextCommands,
-} from "../commands-registry.js";
+import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
-const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
+const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();
 
 export function isAbortTrigger(text?: string): boolean {
@@ -60,14 +57,6 @@ export async function tryFastAbortFromMessage(params: {
   cfg: ClawdbotConfig;
 }): Promise<{ handled: boolean; aborted: boolean }> {
   const { ctx, cfg } = params;
-  const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface,
-    commandSource: ctx.CommandSource,
-  });
-  if (!allowTextCommands) return { handled: false, aborted: false };
-
   const commandAuthorized = ctx.CommandAuthorized ?? true;
   const auth = resolveCommandAuthorization({
     ctx,
@@ -82,9 +71,7 @@ export async function tryFastAbortFromMessage(params: {
     config: cfg,
   });
   // Use RawBody/CommandBody for abort detection (clean message without structural context).
-  const raw = stripStructuralPrefixes(
-    ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
-  );
+  const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
   const normalized = normalizeCommandBody(stripped);
@@ -103,7 +90,13 @@ export async function tryFastAbortFromMessage(params: {
       entry.abortedLastRun = true;
       entry.updatedAt = Date.now();
       store[key] = entry;
-      await saveSessionStore(storePath, store);
+      await updateSessionStore(storePath, (nextStore) => {
+        const nextEntry = nextStore[key] ?? entry;
+        if (!nextEntry) return;
+        nextEntry.abortedLastRun = true;
+        nextEntry.updatedAt = Date.now();
+        nextStore[key] = nextEntry;
+      });
     } else if (abortKey) {
       setAbortMemory(abortKey, true);
     }

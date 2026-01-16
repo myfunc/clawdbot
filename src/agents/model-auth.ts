@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -8,13 +10,11 @@ import {
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
+  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-export {
-  ensureAuthProfileStore,
-  resolveAuthProfileOrder,
-} from "./auth-profiles.js";
+export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
 export function getCustomProviderApiKey(
   cfg: ClawdbotConfig | undefined,
@@ -97,7 +97,15 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  throw new Error(`No API key found for provider "${provider}".`);
+  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
+  const resolvedAgentDir = path.dirname(authStorePath);
+  throw new Error(
+    [
+      `No API key found for provider "${provider}".`,
+      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
+      "Configure auth for this agent (clawdbot agents add <id>) or copy auth-profiles.json from the main agentDir.",
+    ].join(" "),
+  );
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
@@ -109,16 +117,12 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = process.env[envVar]?.trim();
     if (!value) return null;
-    const source = applied.has(envVar)
-      ? `shell env: ${envVar}`
-      : `env: ${envVar}`;
+    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
     return { apiKey: value, source };
   };
 
   if (normalized === "github-copilot") {
-    return (
-      pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN")
-    );
+    return pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN");
   }
 
   if (normalized === "anthropic") {

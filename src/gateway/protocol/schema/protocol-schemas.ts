@@ -30,6 +30,7 @@ import {
 import {
   ConfigApplyParamsSchema,
   ConfigGetParamsSchema,
+  ConfigPatchParamsSchema,
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
@@ -61,6 +62,7 @@ import {
   ChatAbortParamsSchema,
   ChatEventSchema,
   ChatHistoryParamsSchema,
+  ChatInjectParamsSchema,
   ChatSendParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
@@ -84,11 +86,7 @@ import {
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
 } from "./sessions.js";
-import {
-  PresenceEntrySchema,
-  SnapshotSchema,
-  StateVersionSchema,
-} from "./snapshot.js";
+import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -135,6 +133,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,
+  ConfigPatchParams: ConfigPatchParamsSchema,
   ConfigSchemaParams: ConfigSchemaParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
   WizardStartParams: WizardStartParamsSchema,
@@ -174,6 +173,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ChatHistoryParams: ChatHistoryParamsSchema,
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
+  ChatInjectParams: ChatInjectParamsSchema,
   ChatEvent: ChatEventSchema,
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,

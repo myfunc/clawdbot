@@ -1,4 +1,8 @@
-import { resolveEffectiveMessagesConfig } from "../../../agents/identity.js";
+import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../../../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../../../auto-reply/envelope.js";
 import { buildHistoryContext } from "../../../auto-reply/reply/history.js";
@@ -53,10 +57,7 @@ export async function processMessage(params: {
   ) => void;
   echoHas: (key: string) => boolean;
   echoForget: (key: string) => void;
-  buildCombinedEchoKey: (p: {
-    sessionKey: string;
-    combinedBody: string;
-  }) => string;
+  buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
@@ -70,12 +71,8 @@ export async function processMessage(params: {
   let shouldClearGroupHistory = false;
 
   if (params.msg.chatType === "group") {
-    const history =
-      params.groupHistory ??
-      params.groupHistories.get(params.groupHistoryKey) ??
-      [];
-    const historyWithoutCurrent =
-      history.length > 0 ? history.slice(0, -1) : [];
+    const history = params.groupHistory ?? params.groupHistories.get(params.groupHistoryKey) ?? [];
+    const historyWithoutCurrent = history.length > 0 ? history.slice(0, -1) : [];
     if (historyWithoutCurrent.length > 0) {
       const lineBreak = "\\n";
       const historyText = historyWithoutCurrent
@@ -142,8 +139,7 @@ export async function processMessage(params: {
     "inbound web message",
   );
 
-  const fromDisplay =
-    params.msg.chatType === "group" ? conversationId : params.msg.from;
+  const fromDisplay = params.msg.chatType === "group" ? conversationId : params.msg.from;
   const kindLabel = params.msg.mediaType ? `, ${params.msg.mediaType}` : "";
   whatsappInboundLog.info(
     `Inbound message ${fromDisplay} -> ${params.msg.to} (${params.msg.chatType}${kindLabel}, ${combinedBody.length} chars)`,
@@ -173,15 +169,18 @@ export async function processMessage(params: {
     }
   }
 
-  const textLimit =
-    params.maxMediaTextChunkLimit ??
-    resolveTextChunkLimit(params.cfg, "whatsapp");
+  const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
   const responsePrefix = resolveEffectiveMessagesConfig(
     params.cfg,
     params.route.agentId,
   ).responsePrefix;
+
+  // Create mutable context for response prefix template interpolation
+  let prefixContext: ResponsePrefixContext = {
+    identityName: resolveIdentityName(params.cfg, params.route.agentId),
+  };
 
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: {
@@ -220,6 +219,7 @@ export async function processMessage(params: {
     replyResolver: params.replyResolver,
     dispatcherOptions: {
       responsePrefix,
+      responsePrefixContextProvider: () => prefixContext,
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {
           didLogHeartbeatStrip = true;
@@ -242,8 +242,7 @@ export async function processMessage(params: {
           params.rememberSentText(payload.text, {});
           return;
         }
-        const shouldLog =
-          info.kind === "final" && payload.text ? true : undefined;
+        const shouldLog = info.kind === "final" && payload.text ? true : undefined;
         params.rememberSentText(payload.text, {
           combinedBody,
           combinedBodySessionKey: params.route.sessionKey,
@@ -251,21 +250,12 @@ export async function processMessage(params: {
         });
         if (info.kind === "final") {
           const fromDisplay =
-            params.msg.chatType === "group"
-              ? conversationId
-              : (params.msg.from ?? "unknown");
-          const hasMedia = Boolean(
-            payload.mediaUrl || payload.mediaUrls?.length,
-          );
-          whatsappOutboundLog.info(
-            `Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
-          );
+            params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+          whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
           if (shouldLogVerbose()) {
-            const preview =
-              payload.text != null ? elide(payload.text, 400) : "<media>";
-            whatsappOutboundLog.debug(
-              `Reply body: ${preview}${hasMedia ? " (media)" : ""}`,
-            );
+            const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
+            whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
           }
         }
       },
@@ -287,6 +277,13 @@ export async function processMessage(params: {
         typeof params.cfg.channels?.whatsapp?.blockStreaming === "boolean"
           ? !params.cfg.channels.whatsapp.blockStreaming
           : undefined,
+      onModelSelected: (ctx) => {
+        // Mutate the object directly instead of reassigning to ensure the closure sees updates
+        prefixContext.provider = ctx.provider;
+        prefixContext.model = extractShortModelName(ctx.model);
+        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+      },
     },
   });
 
@@ -294,9 +291,7 @@ export async function processMessage(params: {
     if (shouldClearGroupHistory && didSendReply) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }
-    logVerbose(
-      "Skipping auto-reply: silent token or no text/media returned from resolver",
-    );
+    logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
     return false;
   }
 

@@ -15,6 +15,7 @@ export {
 } from "./skills/env-overrides.js";
 export type {
   ClawdbotSkillMetadata,
+  SkillEligibilityContext,
   SkillEntry,
   SkillInstallSpec,
   SkillSnapshot,
@@ -32,14 +33,10 @@ export {
 export function resolveSkillsInstallPreferences(config?: ClawdbotConfig) {
   const raw = config?.skills?.install;
   const preferBrew = raw?.preferBrew ?? true;
-  const managerRaw =
-    typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "";
+  const managerRaw = typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "";
   const manager = managerRaw.toLowerCase();
   const nodeManager =
-    manager === "pnpm" ||
-    manager === "yarn" ||
-    manager === "bun" ||
-    manager === "npm"
+    manager === "pnpm" || manager === "yarn" || manager === "bun" || manager === "npm"
       ? (manager as "npm" | "pnpm" | "yarn" | "bun")
       : "npm";
   return { preferBrew, nodeManager };

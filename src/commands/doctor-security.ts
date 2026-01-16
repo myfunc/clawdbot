@@ -7,6 +7,7 @@ import { note } from "../terminal/note.js";
 
 export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
   const warnings: string[] = [];
+  const auditHint = `- Run: clawdbot security audit --deep`;
 
   const warnDmPolicy = async (params: {
     label: string;
@@ -20,13 +21,9 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const configAllowFrom = (params.allowFrom ?? []).map((v) =>
-      String(v).trim(),
-    );
+    const configAllowFrom = (params.allowFrom ?? []).map((v) => String(v).trim());
     const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readChannelAllowFromStore(
-      params.provider,
-    ).catch(() => []);
+    const storeAllowFrom = await readChannelAllowFromStore(params.provider).catch(() => []);
     const normalizedCfg = configAllowFrom
       .filter((v) => v !== "*")
       .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
@@ -36,35 +33,36 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
       .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
       .map((v) => v.trim())
       .filter(Boolean);
-    const allowCount = Array.from(
-      new Set([...normalizedCfg, ...normalizedStore]),
-    ).length;
+    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+    const dmScope = cfg.session?.dmScope ?? "main";
+    const isMultiUserDm = hasWildcard || allowCount > 1;
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;
-      warnings.push(
-        `- ${params.label} DMs: OPEN (${policyPath}="open"). Anyone can DM it.`,
-      );
+      warnings.push(`- ${params.label} DMs: OPEN (${policyPath}="open"). Anyone can DM it.`);
       if (!hasWildcard) {
         warnings.push(
           `- ${params.label} DMs: config invalid — "open" requires ${allowFromPath} to include "*".`,
         );
       }
-      return;
     }
 
     if (dmPolicy === "disabled") {
-      warnings.push(
-        `- ${params.label} DMs: disabled (${policyPath}="disabled").`,
-      );
+      warnings.push(`- ${params.label} DMs: disabled (${policyPath}="disabled").`);
       return;
     }
 
-    if (allowCount === 0) {
+    if (dmPolicy !== "open" && allowCount === 0) {
       warnings.push(
         `- ${params.label} DMs: locked (${policyPath}="${dmPolicy}") with no allowlist; unknown senders will be blocked / get a pairing code.`,
       );
       warnings.push(`  ${params.approveHint}`);
+    }
+
+    if (dmScope === "main" && isMultiUserDm) {
+      warnings.push(
+        `- ${params.label} DMs: multiple senders share the main session; set session.dmScope="per-channel-peer" to isolate sessions.`,
+      );
     }
   };
 
@@ -77,9 +75,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
       accountIds,
     });
     const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled
-      ? plugin.config.isEnabled(account, cfg)
-      : true;
+    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
     if (!enabled) continue;
     const configured = plugin.config.isConfigured
       ? await plugin.config.isConfigured(account, cfg)
@@ -112,7 +108,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
     }
   }
 
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Security");
-  }
+  const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
+  lines.push(auditHint);
+  note(lines.join("\n"), "Security");
 }

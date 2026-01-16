@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -67,6 +68,14 @@ const hoisted = vi.hoisted(() => ({
   },
 }));
 
+const testConfigRoot = {
+  value: path.join(os.tmpdir(), `clawdbot-gateway-test-${process.pid}-${crypto.randomUUID()}`),
+};
+
+export const setTestConfigRoot = (root: string) => {
+  testConfigRoot.value = root;
+};
+
 export const bridgeStartCalls = hoisted.bridgeStartCalls;
 export const bridgeInvoke = hoisted.bridgeInvoke;
 export const bridgeListConnected = hoisted.bridgeListConnected;
@@ -100,17 +109,15 @@ export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<
-    typeof import("@mariozechner/pi-coding-agent")
-  >("@mariozechner/pi-coding-agent");
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
 
   return {
     ...actual,
     discoverModels: (...args: unknown[]) => {
       if (!piSdkMock.enabled) {
-        return (actual.discoverModels as (...args: unknown[]) => unknown)(
-          ...args,
-        );
+        return (actual.discoverModels as (...args: unknown[]) => unknown)(...args);
       }
       piSdkMock.discoverCalls += 1;
       return piSdkMock.models;
@@ -142,9 +149,8 @@ vi.mock("../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/sessions.js")>(
-    "../config/sessions.js",
-  );
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
     saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
@@ -158,21 +164,25 @@ vi.mock("../config/sessions.js", async () => {
 });
 
 vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>(
-    "../config/config.js",
-  );
-  const resolveConfigPath = () =>
-    path.join(os.homedir(), ".clawdbot", "clawdbot.json");
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const resolveConfigPath = () => path.join(testConfigRoot.value, "clawdbot.json");
+  const hashConfigRaw = (raw: string | null) =>
+    crypto
+      .createHash("sha256")
+      .update(raw ?? "")
+      .digest("hex");
 
   const readConfigFileSnapshot = async () => {
     if (testState.legacyIssues.length > 0) {
+      const raw = JSON.stringify(testState.legacyParsed ?? {});
       return {
         path: resolveConfigPath(),
         exists: true,
-        raw: JSON.stringify(testState.legacyParsed ?? {}),
+        raw,
         parsed: testState.legacyParsed ?? {},
         valid: false,
         config: {},
+        hash: hashConfigRaw(raw),
         issues: testState.legacyIssues.map((issue) => ({
           path: issue.path,
           message: issue.message,
@@ -191,6 +201,7 @@ vi.mock("../config/config.js", async () => {
         parsed: {},
         valid: true,
         config: {},
+        hash: hashConfigRaw(null),
         issues: [],
         legacyIssues: [],
       };
@@ -205,6 +216,7 @@ vi.mock("../config/config.js", async () => {
         parsed,
         valid: true,
         config: parsed,
+        hash: hashConfigRaw(raw),
         issues: [],
         legacyIssues: [],
       };
@@ -216,6 +228,7 @@ vi.mock("../config/config.js", async () => {
         parsed: {},
         valid: false,
         config: {},
+        hash: hashConfigRaw(null),
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
         legacyIssues: [],
       };
@@ -231,8 +244,12 @@ vi.mock("../config/config.js", async () => {
 
   return {
     ...actual,
-    CONFIG_PATH_CLAWDBOT: resolveConfigPath(),
-    STATE_DIR_CLAWDBOT: path.dirname(resolveConfigPath()),
+    get CONFIG_PATH_CLAWDBOT() {
+      return resolveConfigPath();
+    },
+    get STATE_DIR_CLAWDBOT() {
+      return path.dirname(resolveConfigPath());
+    },
     get isNixMode() {
       return testIsNixMode.value;
     },
@@ -278,10 +295,8 @@ vi.mock("../config/config.js", async () => {
       hooks: testState.hooksConfig,
       cron: (() => {
         const cron: Record<string, unknown> = {};
-        if (typeof testState.cronEnabled === "boolean")
-          cron.enabled = testState.cronEnabled;
-        if (typeof testState.cronStorePath === "string")
-          cron.store = testState.cronStorePath;
+        if (typeof testState.cronEnabled === "boolean") cron.enabled = testState.cronEnabled;
+        if (typeof testState.cronStorePath === "string") cron.store = testState.cronStorePath;
         return Object.keys(cron).length > 0 ? cron : undefined;
       })(),
     }),
@@ -303,13 +318,12 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../agents/pi-embedded.js")
-  >("../agents/pi-embedded.js");
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
+    "../agents/pi-embedded.js",
+  );
   return {
     ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) =>
-      embeddedRunMock.activeIds.has(sessionId),
+    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     abortEmbeddedPiRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -328,9 +342,7 @@ vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../web/outbound.js", () => ({
-  sendMessageWhatsApp: vi
-    .fn()
-    .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+  sendMessageWhatsApp: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand,

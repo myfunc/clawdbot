@@ -30,8 +30,7 @@ export function createAudioAsVoiceBuffer(params: {
       }
     },
     shouldBuffer: (payload) => params.isAudioPayload(payload),
-    finalize: (payload) =>
-      seenAudioAsVoice ? { ...payload, audioAsVoice: true } : payload,
+    finalize: (payload) => (seenAudioAsVoice ? { ...payload, audioAsVoice: true } : payload),
   };
 }
 
@@ -107,9 +106,7 @@ export function createBlockReplyPipeline(params: {
     if (sentKeys.has(payloadKey) || pendingKeys.has(payloadKey)) return;
     pendingKeys.add(payloadKey);
 
-    const timeoutError = new Error(
-      `block reply delivery timed out after ${timeoutMs}ms`,
-    );
+    const timeoutError = new Error(`block reply delivery timed out after ${timeoutMs}ms`);
     const abortController = new AbortController();
 
     const deliverPromise = (async () => {
@@ -200,8 +197,7 @@ export function createBlockReplyPipeline(params: {
   const enqueue = (payload: ReplyPayload) => {
     if (aborted) return;
     if (bufferPayload(payload)) return;
-    const hasMedia =
-      Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     if (hasMedia) {
       void coalescer?.flush({ force: true });
       sendPayload(payload);
@@ -209,11 +205,7 @@ export function createBlockReplyPipeline(params: {
     }
     if (coalescer) {
       const payloadKey = createBlockReplyPayloadKey(payload);
-      if (
-        seenKeys.has(payloadKey) ||
-        pendingKeys.has(payloadKey) ||
-        bufferedKeys.has(payloadKey)
-      ) {
+      if (seenKeys.has(payloadKey) || pendingKeys.has(payloadKey) || bufferedKeys.has(payloadKey)) {
         return;
       }
       bufferedKeys.add(payloadKey);
@@ -242,8 +234,7 @@ export function createBlockReplyPipeline(params: {
     enqueue,
     flush,
     stop,
-    hasBuffered: () =>
-      Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
+    hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
     didStream: () => didStream,
     isAborted: () => aborted,
     hasSentPayload: (payload) => {

@@ -1,8 +1,5 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import {
-  getChannelPlugin,
-  listChannelPlugins,
-} from "../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
@@ -11,6 +8,7 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { theme } from "../terminal/theme.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 
 export type ChannelHealthSummary = {
@@ -55,25 +53,20 @@ const isAccountEnabled = (account: unknown): boolean => {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : null;
+  value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 
 const formatProbeLine = (probe: unknown): string | null => {
   const record = asRecord(probe);
   if (!record) return null;
   const ok = typeof record.ok === "boolean" ? record.ok : undefined;
   if (ok === undefined) return null;
-  const elapsedMs =
-    typeof record.elapsedMs === "number" ? record.elapsedMs : null;
+  const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
   const status = typeof record.status === "number" ? record.status : null;
   const error = typeof record.error === "string" ? record.error : null;
   const bot = asRecord(record.bot);
-  const botUsername =
-    bot && typeof bot.username === "string" ? bot.username : null;
+  const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
   const webhook = asRecord(record.webhook);
-  const webhookUrl =
-    webhook && typeof webhook.url === "string" ? webhook.url : null;
+  const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
 
   if (ok) {
     let label = "ok";
@@ -87,32 +80,45 @@ const formatProbeLine = (probe: unknown): string | null => {
   return label;
 };
 
+function styleHealthChannelLine(line: string): string {
+  const colon = line.indexOf(":");
+  if (colon === -1) return line;
+
+  const label = line.slice(0, colon + 1);
+  const detail = line.slice(colon + 1).trimStart();
+  const normalized = detail.toLowerCase();
+
+  const applyPrefix = (prefix: string, color: (value: string) => string) =>
+    `${label} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
+
+  if (normalized.startsWith("failed")) return applyPrefix("failed", theme.error);
+  if (normalized.startsWith("ok")) return applyPrefix("ok", theme.success);
+  if (normalized.startsWith("linked")) return applyPrefix("linked", theme.success);
+  if (normalized.startsWith("configured")) return applyPrefix("configured", theme.success);
+  if (normalized.startsWith("not linked")) return applyPrefix("not linked", theme.warn);
+  if (normalized.startsWith("not configured")) return applyPrefix("not configured", theme.muted);
+  if (normalized.startsWith("unknown")) return applyPrefix("unknown", theme.warn);
+
+  return line;
+}
+
 export const formatHealthChannelLines = (summary: HealthSummary): string[] => {
   const channels = summary.channels ?? {};
   const channelOrder =
-    summary.channelOrder?.length > 0
-      ? summary.channelOrder
-      : Object.keys(channels);
+    summary.channelOrder?.length > 0 ? summary.channelOrder : Object.keys(channels);
 
   const lines: string[] = [];
   for (const channelId of channelOrder) {
     const channelSummary = channels[channelId];
     if (!channelSummary) continue;
     const plugin = getChannelPlugin(channelId as never);
-    const label =
-      summary.channelLabels?.[channelId] ?? plugin?.meta.label ?? channelId;
-    const linked =
-      typeof channelSummary.linked === "boolean" ? channelSummary.linked : null;
+    const label = summary.channelLabels?.[channelId] ?? plugin?.meta.label ?? channelId;
+    const linked = typeof channelSummary.linked === "boolean" ? channelSummary.linked : null;
     if (linked !== null) {
       if (linked) {
         const authAgeMs =
-          typeof channelSummary.authAgeMs === "number"
-            ? channelSummary.authAgeMs
-            : null;
-        const authLabel =
-          authAgeMs != null
-            ? ` (auth age ${Math.round(authAgeMs / 60000)}m)`
-            : "";
+          typeof channelSummary.authAgeMs === "number" ? channelSummary.authAgeMs : null;
+        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
         lines.push(`${label}: linked${authLabel}`);
       } else {
         lines.push(`${label}: not linked`);
@@ -121,9 +127,7 @@ export const formatHealthChannelLines = (summary: HealthSummary): string[] => {
     }
 
     const configured =
-      typeof channelSummary.configured === "boolean"
-        ? channelSummary.configured
-        : null;
+      typeof channelSummary.configured === "boolean" ? channelSummary.configured : null;
     if (configured === false) {
       lines.push(`${label}: not configured`);
       continue;
@@ -282,7 +286,7 @@ export async function healthCommand(
       }
     }
     for (const line of formatHealthChannelLines(summary)) {
-      runtime.log(line);
+      runtime.log(styleHealthChannelLine(line));
     }
     const cfg = loadConfig();
     for (const plugin of listChannelPlugins()) {
@@ -306,9 +310,7 @@ export async function healthCommand(
 
     runtime.log(info(`Heartbeat interval: ${summary.heartbeatSeconds}s`));
     runtime.log(
-      info(
-        `Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`,
-      ),
+      info(`Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`),
     );
     if (summary.sessions.recent.length > 0) {
       runtime.log("Recent sessions:");

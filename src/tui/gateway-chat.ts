@@ -7,10 +7,7 @@ import {
   type SessionsListParams,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 
 export type GatewayConnectionOptions = {
@@ -37,7 +34,11 @@ export type GatewaySessionList = {
   ts: number;
   path: string;
   count: number;
-  defaults?: { model?: string | null; contextTokens?: number | null };
+  defaults?: {
+    model?: string | null;
+    modelProvider?: string | null;
+    contextTokens?: number | null;
+  };
   sessions: Array<{
     key: string;
     sessionId?: string;
@@ -163,13 +164,10 @@ export class GatewayChatClient {
   }
 
   async abortChat(opts: { sessionKey: string; runId: string }) {
-    return await this.client.request<{ ok: boolean; aborted: boolean }>(
-      "chat.abort",
-      {
-        sessionKey: opts.sessionKey,
-        runId: opts.runId,
-      },
-    );
+    return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
+      sessionKey: opts.sessionKey,
+      runId: opts.runId,
+    });
   }
 
   async loadHistory(opts: { sessionKey: string; limit?: number }) {
@@ -206,9 +204,7 @@ export class GatewayChatClient {
   }
 
   async listModels(): Promise<GatewayModelChoice[]> {
-    const res = await this.client.request<{ models?: GatewayModelChoice[] }>(
-      "models.list",
-    );
+    const res = await this.client.request<{ models?: GatewayModelChoice[] }>("models.list");
     return Array.isArray(res?.models) ? res.models : [];
   }
 }
@@ -221,9 +217,7 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
 
   const localPort = resolveGatewayPort(config);
   const url =
-    (typeof opts.url === "string" && opts.url.trim().length > 0
-      ? opts.url.trim()
-      : undefined) ||
+    (typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined) ||
     (typeof remote?.url === "string" && remote.url.trim().length > 0
       ? remote.url.trim()
       : undefined) ||

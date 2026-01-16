@@ -11,7 +11,7 @@ read_when:
 - No estimated costs; only the provider-reported windows.
 
 ## Where it shows up
-- `/status` in chats: emoji‑rich status card with session tokens + estimated cost (API key only) and provider quota windows when available.
+- `/status` in chats: emoji‑rich status card with session tokens + estimated cost (API key only). When OAuth/token profiles exist, the **OAuth/token status block** includes provider usage headers (when available).
 - `/cost on|off` in chats: toggles per‑response usage lines (OAuth shows tokens only).
 - CLI: `clawdbot status --usage` prints a full per-provider breakdown.
 - CLI: `clawdbot channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
@@ -23,6 +23,7 @@ read_when:
 - **Gemini CLI**: OAuth tokens in auth profiles.
 - **Antigravity**: OAuth tokens in auth profiles.
 - **OpenAI Codex**: OAuth tokens in auth profiles (accountId used when present).
+- **MiniMax**: API key (coding plan key; `MINIMAX_CODE_PLAN_KEY` or `MINIMAX_API_KEY`); uses the 5‑hour coding plan window.
 - **z.ai**: API key via env/config/auth store.
 
 Usage is hidden if no matching OAuth/API credentials exist.

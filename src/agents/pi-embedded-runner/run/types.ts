@@ -1,25 +1,14 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type {
-  Api,
-  AssistantMessage,
-  ImageContent,
-  Model,
-} from "@mariozechner/pi-ai";
-import type {
-  discoverAuthStorage,
-  discoverModels,
-} from "@mariozechner/pi-coding-agent";
+import type { Api, AssistantMessage, ImageContent, Model } from "@mariozechner/pi-ai";
+import type { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 
-import type {
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "../../../auto-reply/thinking.js";
+import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { ExecElevatedDefaults } from "../../bash-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 
 type AuthStorage = ReturnType<typeof discoverAuthStorage>;
 type ModelRegistry = ReturnType<typeof discoverModels>;
@@ -54,10 +43,7 @@ export type EmbeddedRunAttemptParams = {
   runId: string;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
-  onPartialReply?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-  }) => void | Promise<void>;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: {
     text?: string;
@@ -67,18 +53,9 @@ export type EmbeddedRunAttemptParams = {
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-  }) => void | Promise<void>;
-  onToolResult?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-  }) => void | Promise<void>;
-  onAgentEvent?: (evt: {
-    stream: string;
-    data: Record<string, unknown>;
-  }) => void;
+  onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
@@ -89,6 +66,7 @@ export type EmbeddedRunAttemptResult = {
   timedOut: boolean;
   promptError: unknown;
   sessionIdUsed: string;
+  systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;

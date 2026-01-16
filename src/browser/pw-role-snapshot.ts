@@ -77,13 +77,8 @@ const STRUCTURAL_ROLES = new Set([
   "none",
 ]);
 
-export function getRoleSnapshotStats(
-  snapshot: string,
-  refs: RoleRefMap,
-): RoleSnapshotStats {
-  const interactive = Object.values(refs).filter((r) =>
-    INTERACTIVE_ROLES.has(r.role),
-  ).length;
+export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
+  const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
   return {
     lines: snapshot.split("\n").length,
     chars: snapshot.length,
@@ -137,10 +132,7 @@ function createRoleNameTracker(): RoleNameTracker {
   };
 }
 
-function removeNthFromNonDuplicates(
-  refs: RoleRefMap,
-  tracker: RoleNameTracker,
-) {
+function removeNthFromNonDuplicates(refs: RoleRefMap, tracker: RoleNameTracker) {
   const duplicates = tracker.getDuplicateKeys();
   for (const [ref, data] of Object.entries(refs)) {
     const key = tracker.getKey(data.role, data.name);
@@ -296,6 +288,78 @@ export function buildRoleSnapshotFromAriaSnapshot(
   removeNthFromNonDuplicates(refs, tracker);
 
   const tree = result.join("\n") || "(empty)";
+  return {
+    snapshot: options.compact ? compactTree(tree) : tree,
+    refs,
+  };
+}
+
+function parseAiSnapshotRef(suffix: string): string | null {
+  const match = suffix.match(/\[ref=(e\d+)\]/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Build a role snapshot from Playwright's AI snapshot output while preserving Playwright's own
+ * aria-ref ids (e.g. ref=e13). This makes the refs self-resolving across calls.
+ */
+export function buildRoleSnapshotFromAiSnapshot(
+  aiSnapshot: string,
+  options: RoleSnapshotOptions = {},
+): { snapshot: string; refs: RoleRefMap } {
+  const lines = String(aiSnapshot ?? "").split("\n");
+  const refs: RoleRefMap = {};
+
+  if (options.interactive) {
+    const out: string[] = [];
+    for (const line of lines) {
+      const depth = getIndentLevel(line);
+      if (options.maxDepth !== undefined && depth > options.maxDepth) continue;
+      const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+      if (!match) continue;
+      const [, , roleRaw, name, suffix] = match;
+      if (roleRaw.startsWith("/")) continue;
+      const role = roleRaw.toLowerCase();
+      if (!INTERACTIVE_ROLES.has(role)) continue;
+      const ref = parseAiSnapshotRef(suffix);
+      if (!ref) continue;
+      refs[ref] = { role, ...(name ? { name } : {}) };
+      out.push(`- ${roleRaw}${name ? ` "${name}"` : ""}${suffix}`);
+    }
+    return {
+      snapshot: out.join("\n") || "(no interactive elements)",
+      refs,
+    };
+  }
+
+  const out: string[] = [];
+  for (const line of lines) {
+    const depth = getIndentLevel(line);
+    if (options.maxDepth !== undefined && depth > options.maxDepth) continue;
+
+    const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+    if (!match) {
+      out.push(line);
+      continue;
+    }
+    const [, , roleRaw, name, suffix] = match;
+    if (roleRaw.startsWith("/")) {
+      out.push(line);
+      continue;
+    }
+
+    const role = roleRaw.toLowerCase();
+    const isStructural = STRUCTURAL_ROLES.has(role);
+
+    if (options.compact && isStructural && !name) continue;
+
+    const ref = parseAiSnapshotRef(suffix);
+    if (ref) refs[ref] = { role, ...(name ? { name } : {}) };
+
+    out.push(line);
+  }
+
+  const tree = out.join("\n") || "(empty)";
   return {
     snapshot: options.compact ? compactTree(tree) : tree,
     refs,

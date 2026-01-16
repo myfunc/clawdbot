@@ -25,6 +25,7 @@ vi.mock("../commands/configure.js", () => ({
   CONFIGURE_WIZARD_SECTIONS: [
     "workspace",
     "model",
+    "web",
     "gateway",
     "daemon",
     "channels",
@@ -55,12 +56,9 @@ describe("cli program (smoke)", () => {
 
   it("runs message with required options", async () => {
     const program = buildProgram();
-    await program.parseAsync(
-      ["message", "send", "--to", "+1", "--message", "hi"],
-      {
-        from: "user",
-      },
-    );
+    await program.parseAsync(["message", "send", "--to", "+1", "--message", "hi"], {
+      from: "user",
+    });
     expect(messageCommand).toHaveBeenCalled();
   });
 
@@ -73,9 +71,7 @@ describe("cli program (smoke)", () => {
   it("runs tui without overriding timeout", async () => {
     const program = buildProgram();
     await program.parseAsync(["tui"], { from: "user" });
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: undefined }),
-    );
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
   });
 
   it("runs tui with explicit timeout override", async () => {
@@ -83,20 +79,14 @@ describe("cli program (smoke)", () => {
     await program.parseAsync(["tui", "--timeout-ms", "45000"], {
       from: "user",
     });
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 45000 }),
-    );
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
   });
 
   it("warns and ignores invalid tui timeout override", async () => {
     const program = buildProgram();
     await program.parseAsync(["tui", "--timeout-ms", "nope"], { from: "user" });
-    expect(runtime.error).toHaveBeenCalledWith(
-      'warning: invalid --timeout-ms "nope"; ignoring',
-    );
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: undefined }),
-    );
+    expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
   });
 
   it("runs config alias as configure", async () => {
@@ -252,9 +242,6 @@ describe("cli program (smoke)", () => {
     await program.parseAsync(["channels", "logout", "--account", "work"], {
       from: "user",
     });
-    expect(runChannelLogout).toHaveBeenCalledWith(
-      { channel: undefined, account: "work" },
-      runtime,
-    );
+    expect(runChannelLogout).toHaveBeenCalledWith({ channel: undefined, account: "work" }, runtime);
   });
 });

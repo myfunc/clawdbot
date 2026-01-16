@@ -1,21 +1,15 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-} from "./types.base.js";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./types.base.js";
 import type { DmConfig } from "./types.messages.js";
 
-export type SignalReactionNotificationMode =
-  | "off"
-  | "own"
-  | "all"
-  | "allowlist";
+export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /** If false, do not start this Signal account. Default: true. */
   enabled?: boolean;
   /** Optional explicit E.164 account for signal-cli. */

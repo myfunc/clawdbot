@@ -16,9 +16,7 @@ export type ParsedAgentSessionKey = {
   rest: string;
 };
 
-export function resolveAgentIdFromSessionKey(
-  sessionKey: string | undefined | null,
-): string {
+export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
 }
@@ -67,9 +65,7 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
-export function isSubagentSessionKey(
-  sessionKey: string | undefined | null,
-): boolean {
+export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) return false;
   if (raw.toLowerCase().startsWith("subagent:")) return true;
@@ -92,9 +88,20 @@ export function buildAgentPeerSessionKey(params: {
   channel: string;
   peerKind?: "dm" | "group" | "channel" | null;
   peerId?: string | null;
+  /** DM session scope. */
+  dmScope?: "main" | "per-peer" | "per-channel-peer";
 }): string {
   const peerKind = params.peerKind ?? "dm";
   if (peerKind === "dm") {
+    const dmScope = params.dmScope ?? "main";
+    const peerId = (params.peerId ?? "").trim();
+    if (dmScope === "per-channel-peer" && peerId) {
+      const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
+      return `agent:${normalizeAgentId(params.agentId)}:${channel}:dm:${peerId}`;
+    }
+    if (dmScope === "per-peer" && peerId) {
+      return `agent:${normalizeAgentId(params.agentId)}:dm:${peerId}`;
+    }
     return buildAgentMainSessionKey({
       agentId: params.agentId,
       mainKey: params.mainKey,

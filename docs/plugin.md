@@ -33,10 +33,19 @@ clawdbot plugins install @clawdbot/voice-call
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 
+## Available plugins (official)
+
+- Microsoft Teams is plugin-only as of 2026.1.15; install `@clawdbot/msteams` if you use Teams.
+- [Voice Call](/plugins/voice-call) — `@clawdbot/voice-call`
+- [Matrix](/channels/matrix) — `@clawdbot/matrix`
+- [Zalo](/channels/zalo) — `@clawdbot/zalo`
+- [Microsoft Teams](/channels/msteams) — `@clawdbot/msteams`
+
 Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. They can
 register:
 
 - Gateway RPC methods
+- Gateway HTTP handlers
 - Agent tools
 - CLI commands
 - Background services
@@ -164,6 +173,171 @@ Plugins export either:
 
 - A function: `(api) => { ... }`
 - An object: `{ id, name, configSchema, register(api) { ... } }`
+
+## Provider plugins (model auth)
+
+Plugins can register **model provider auth** flows so users can run OAuth or
+API-key setup inside Clawdbot (no external scripts needed).
+
+Register a provider via `api.registerProvider(...)`. Each provider exposes one
+or more auth methods (OAuth, API key, device code, etc.). These methods power:
+
+- `clawdbot models auth login --provider <id> [--method <id>]`
+
+Example:
+
+```ts
+api.registerProvider({
+  id: "acme",
+  label: "AcmeAI",
+  auth: [
+    {
+      id: "oauth",
+      label: "OAuth",
+      kind: "oauth",
+      run: async (ctx) => {
+        // Run OAuth flow and return auth profiles.
+        return {
+          profiles: [
+            {
+              profileId: "acme:default",
+              credential: {
+                type: "oauth",
+                provider: "acme",
+                access: "...",
+                refresh: "...",
+                expires: Date.now() + 3600 * 1000,
+              },
+            },
+          ],
+          defaultModel: "acme/opus-1",
+        };
+      },
+    },
+  ],
+});
+```
+
+Notes:
+- `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
+  `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
+- Return `configPatch` when you need to add default models or provider config.
+- Return `defaultModel` so `--set-default` can update agent defaults.
+
+### Register a messaging channel
+
+Plugins can register **channel plugins** that behave like built‑in channels
+(WhatsApp, Telegram, etc.). Channel config lives under `channels.<id>` and is
+validated by your channel plugin code.
+
+```ts
+const myChannel = {
+  id: "acmechat",
+  meta: {
+    id: "acmechat",
+    label: "AcmeChat",
+    selectionLabel: "AcmeChat (API)",
+    docsPath: "/channels/acmechat",
+    blurb: "demo channel plugin.",
+    aliases: ["acme"],
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    resolveAccount: (cfg, accountId) =>
+      (cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? { accountId }),
+  },
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async () => ({ ok: true }),
+  },
+};
+
+export default function (api) {
+  api.registerChannel({ plugin: myChannel });
+}
+```
+
+Notes:
+- Put config under `channels.<id>` (not `plugins.entries`).
+- `meta.label` is used for labels in CLI/UI lists.
+- `meta.aliases` adds alternate ids for normalization and CLI inputs.
+
+### Write a new messaging channel (step‑by‑step)
+
+Use this when you want a **new chat surface** (a “messaging channel”), not a model provider.
+Model provider docs live under `/providers/*`.
+
+1) Pick an id + config shape
+- All channel config lives under `channels.<id>`.
+- Prefer `channels.<id>.accounts.<accountId>` for multi‑account setups.
+
+2) Define the channel metadata
+- `meta.label`, `meta.selectionLabel`, `meta.docsPath`, `meta.blurb` control CLI/UI lists.
+- `meta.docsPath` should point at a docs page like `/channels/<id>`.
+
+3) Implement the required adapters
+- `config.listAccountIds` + `config.resolveAccount`
+- `capabilities` (chat types, media, threads, etc.)
+- `outbound.deliveryMode` + `outbound.sendText` (for basic send)
+
+4) Add optional adapters as needed
+- `setup` (wizard), `security` (DM policy), `status` (health/diagnostics)
+- `gateway` (start/stop/login), `mentions`, `threading`, `streaming`
+- `actions` (message actions), `commands` (native command behavior)
+
+5) Register the channel in your plugin
+- `api.registerChannel({ plugin })`
+
+Minimal config example:
+
+```json5
+{
+  channels: {
+    acmechat: {
+      accounts: {
+        default: { token: "ACME_TOKEN", enabled: true }
+      }
+    }
+  }
+}
+```
+
+Minimal channel plugin (outbound‑only):
+
+```ts
+const plugin = {
+  id: "acmechat",
+  meta: {
+    id: "acmechat",
+    label: "AcmeChat",
+    selectionLabel: "AcmeChat (API)",
+    docsPath: "/channels/acmechat",
+    blurb: "AcmeChat messaging channel.",
+    aliases: ["acme"],
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    resolveAccount: (cfg, accountId) =>
+      (cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? { accountId }),
+  },
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async ({ text }) => {
+      // deliver `text` to your channel here
+      return { ok: true };
+    },
+  },
+};
+
+export default function (api) {
+  api.registerChannel({ plugin });
+}
+```
+
+Load the plugin (extensions dir or `plugins.load.paths`), restart the gateway,
+then configure `channels.<id>` in your config.
 
 ### Register a tool
 

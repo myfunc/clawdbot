@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
-import {
-  createExecTool,
-  createProcessTool,
-  execTool,
-  processTool,
-} from "./bash-tools.js";
+import { createExecTool, createProcessTool, execTool, processTool } from "./bash-tools.js";
+import { buildDockerExecArgs } from "./bash-tools.shared.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -15,10 +11,8 @@ const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
 const longDelayCmd = isWin ? "Start-Sleep -Seconds 2" : "sleep 2";
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
-const echoAfterDelay = (message: string) =>
-  joinCommands([shortDelayCmd, `echo ${message}`]);
-const echoLines = (lines: string[]) =>
-  joinCommands(lines.map((line) => `echo ${line}`));
+const echoAfterDelay = (message: string) => joinCommands([shortDelayCmd, `echo ${message}`]);
+const echoLines = (lines: string[]) => joinCommands(lines.map((line) => `echo ${line}`));
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -74,8 +68,7 @@ describe("exec tool backgrounding", () => {
 
       let status = "running";
       let output = "";
-      const deadline =
-        Date.now() + (process.platform === "win32" ? 8000 : 2000);
+      const deadline = Date.now() + (process.platform === "win32" ? 8000 : 2000);
 
       while (Date.now() < deadline && status === "running") {
         const poll = await processTool.execute("call2", {
@@ -106,9 +99,7 @@ describe("exec tool backgrounding", () => {
     const sessionId = (result.details as { sessionId: string }).sessionId;
 
     const list = await processTool.execute("call2", { action: "list" });
-    const sessions = (
-      list.details as { sessions: Array<{ sessionId: string }> }
-    ).sessions;
+    const sessions = (list.details as { sessions: Array<{ sessionId: string }> }).sessions;
     expect(sessions.some((s) => s.sessionId === sessionId)).toBe(true);
   });
 
@@ -121,9 +112,8 @@ describe("exec tool backgrounding", () => {
     await sleep(25);
 
     const list = await processTool.execute("call2", { action: "list" });
-    const sessions = (
-      list.details as { sessions: Array<{ sessionId: string; name?: string }> }
-    ).sessions;
+    const sessions = (list.details as { sessions: Array<{ sessionId: string; name?: string }> })
+      .sessions;
     const entry = sessions.find((s) => s.sessionId === sessionId);
     expect(entry?.name).toBe("echo hello");
   });
@@ -239,9 +229,7 @@ describe("exec tool backgrounding", () => {
     const sessionB = (resultB.details as { sessionId: string }).sessionId;
 
     const listA = await processA.execute("call3", { action: "list" });
-    const sessionsA = (
-      listA.details as { sessions: Array<{ sessionId: string }> }
-    ).sessions;
+    const sessionsA = (listA.details as { sessions: Array<{ sessionId: string }> }).sessions;
     expect(sessionsA.some((s) => s.sessionId === sessionA)).toBe(true);
     expect(sessionsA.some((s) => s.sessionId === sessionB)).toBe(false);
 
@@ -250,5 +238,75 @@ describe("exec tool backgrounding", () => {
       sessionId: sessionA,
     });
     expect(pollB.details.status).toBe("failed");
+  });
+});
+
+describe("buildDockerExecArgs", () => {
+  it("prepends custom PATH after login shell sourcing to preserve both custom and system tools", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        PATH: "/custom/bin:/usr/local/bin:/usr/bin",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const commandArg = args[args.length - 1];
+    expect(commandArg).toContain('export PATH="/custom/bin:/usr/local/bin:/usr/bin:$PATH"');
+    expect(commandArg).toContain("echo hello");
+    expect(commandArg).toBe('export PATH="/custom/bin:/usr/local/bin:/usr/bin:$PATH"; echo hello');
+  });
+
+  it("does not add PATH export when PATH is not in env", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const commandArg = args[args.length - 1];
+    expect(commandArg).toBe("echo hello");
+    expect(commandArg).not.toContain("export PATH");
+  });
+
+  it("includes workdir flag when specified", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "pwd",
+      workdir: "/workspace",
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+
+    expect(args).toContain("-w");
+    expect(args).toContain("/workspace");
+  });
+
+  it("uses login shell for consistent environment", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo test",
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+
+    expect(args).toContain("sh");
+    expect(args).toContain("-lc");
+  });
+
+  it("includes tty flag when requested", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "bash",
+      env: { HOME: "/home/user" },
+      tty: true,
+    });
+
+    expect(args).toContain("-t");
   });
 });

@@ -1,10 +1,6 @@
 import type { SlackReactionNotificationMode } from "../../config/config.js";
 import type { SlackMessageEvent } from "../types.js";
-import {
-  allowListMatches,
-  normalizeAllowListLower,
-  normalizeSlackSlug,
-} from "./allow-list.js";
+import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
   allowed: boolean;
@@ -49,10 +45,7 @@ export function shouldEmitSlackReactionNotification(params: {
   return true;
 }
 
-export function resolveSlackChannelLabel(params: {
-  channelId?: string;
-  channelName?: string;
-}) {
+export function resolveSlackChannelLabel(params: { channelId?: string; channelName?: string }) {
   const channelName = params.channelName?.trim();
   if (channelName) {
     const slug = normalizeSlackSlug(channelName);
@@ -77,8 +70,9 @@ export function resolveSlackChannelConfig(params: {
       systemPrompt?: string;
     }
   >;
+  defaultRequireMention?: boolean;
 }): SlackChannelConfigResolved | null {
-  const { channelId, channelName, channels } = params;
+  const { channelId, channelName, channels, defaultRequireMention } = params;
   const entries = channels ?? {};
   const keys = Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
@@ -109,32 +103,25 @@ export function resolveSlackChannelConfig(params: {
   }
   const fallback = entries["*"];
 
+  const requireMentionDefault = defaultRequireMention ?? true;
   if (keys.length === 0) {
-    return { allowed: true, requireMention: true };
+    return { allowed: true, requireMention: requireMentionDefault };
   }
   if (!matched && !fallback) {
-    return { allowed: false, requireMention: true };
+    return { allowed: false, requireMention: requireMentionDefault };
   }
 
   const resolved = matched ?? fallback ?? {};
   const allowed =
-    firstDefined(
-      resolved.enabled,
-      resolved.allow,
-      fallback?.enabled,
-      fallback?.allow,
-      true,
-    ) ?? true;
-  const requireMention =
-    firstDefined(resolved.requireMention, fallback?.requireMention, true) ??
+    firstDefined(resolved.enabled, resolved.allow, fallback?.enabled, fallback?.allow, true) ??
     true;
+  const requireMention =
+    firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
+    requireMentionDefault;
   const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
-  const systemPrompt = firstDefined(
-    resolved.systemPrompt,
-    fallback?.systemPrompt,
-  );
+  const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
   return { allowed, requireMention, allowBots, users, skills, systemPrompt };
 }
 

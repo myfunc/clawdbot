@@ -10,6 +10,7 @@ export type OutboundDeliveryJson = {
   mediaUrl: string | null;
   chatId?: string;
   channelId?: string;
+  roomId?: string;
   conversationId?: string;
   timestamp?: number;
   toJid?: string;
@@ -20,6 +21,7 @@ type OutboundDeliveryMeta = {
   messageId?: string;
   chatId?: string;
   channelId?: string;
+  roomId?: string;
   conversationId?: string;
   timestamp?: number;
   toJid?: string;
@@ -42,8 +44,8 @@ export function formatOutboundDeliverySummary(
 
   if ("chatId" in result) return `${base} (chat ${result.chatId})`;
   if ("channelId" in result) return `${base} (channel ${result.channelId})`;
-  if ("conversationId" in result)
-    return `${base} (conversation ${result.conversationId})`;
+  if ("roomId" in result) return `${base} (room ${result.roomId})`;
+  if ("conversationId" in result) return `${base} (conversation ${result.conversationId})`;
   return base;
 }
 
@@ -70,11 +72,10 @@ export function buildOutboundDeliveryJson(params: {
   if (result && "channelId" in result && result.channelId !== undefined) {
     payload.channelId = result.channelId;
   }
-  if (
-    result &&
-    "conversationId" in result &&
-    result.conversationId !== undefined
-  ) {
+  if (result && "roomId" in result && result.roomId !== undefined) {
+    payload.roomId = result.roomId;
+  }
+  if (result && "conversationId" in result && result.conversationId !== undefined) {
     payload.conversationId = result.conversationId;
   }
   if (result && "timestamp" in result && result.timestamp !== undefined) {

@@ -1,3 +1,5 @@
+import type { ChannelMeta } from "./plugins/types.js";
+
 // Channel docking: add new channels here (order + meta + aliases), then
 // register the plugin in src/channels/plugins/index.ts and keep protocol IDs in sync.
 export const CHAT_CHANNEL_ORDER = [
@@ -7,7 +9,6 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
-  "msteams",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -16,31 +17,18 @@ export const CHANNEL_IDS = [...CHAT_CHANNEL_ORDER] as const;
 
 export const DEFAULT_CHAT_CHANNEL: ChatChannelId = "whatsapp";
 
-export type ChatChannelMeta = {
-  id: ChatChannelId;
-  label: string;
-  selectionLabel: string;
-  docsPath: string;
-  docsLabel?: string;
-  blurb: string;
-  // Channel docking: selection-line formatting for onboarding prompts.
-  // Keep this data-driven to avoid channel-specific branches in shared code.
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
-};
+export type ChatChannelMeta = ChannelMeta;
 
 const WEBSITE_URL = "https://clawd.bot";
 
-const CHAT_CHANNEL_META: Record<ChatChannelId, ChatChannelMeta> = {
+const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
   telegram: {
     id: "telegram",
     label: "Telegram",
     selectionLabel: "Telegram (Bot API)",
     docsPath: "/channels/telegram",
     docsLabel: "telegram",
-    blurb:
-      "simplest way to get started — register a bot with @BotFather and get going.",
+    blurb: "simplest way to get started — register a bot with @BotFather and get going.",
     selectionDocsPrefix: "",
     selectionDocsOmitLabel: true,
     selectionExtras: [WEBSITE_URL],
@@ -75,8 +63,7 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChatChannelMeta> = {
     selectionLabel: "Signal (signal-cli)",
     docsPath: "/channels/signal",
     docsLabel: "signal",
-    blurb:
-      'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
+    blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
   },
   imessage: {
     id: "imessage",
@@ -86,19 +73,10 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChatChannelMeta> = {
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
   },
-  msteams: {
-    id: "msteams",
-    label: "MS Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    docsLabel: "msteams",
-    blurb: "supported (Bot Framework).",
-  },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
-  teams: "msteams",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {
@@ -118,9 +96,7 @@ export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta {
   return CHAT_CHANNEL_META[id];
 }
 
-export function normalizeChatChannelId(
-  raw?: string | null,
-): ChatChannelId | null {
+export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
   const normalized = normalizeChannelKey(raw);
   if (!normalized) return null;
   const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;

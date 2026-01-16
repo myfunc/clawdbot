@@ -384,7 +384,7 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
   },
 
   skills: {
-    allowBundled: ["brave-search", "gemini"],
+    allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"]
     },
@@ -450,6 +450,44 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
     model: {
       primary: "anthropic/claude-sonnet-4-5",
       fallbacks: ["anthropic/claude-opus-4-5"]
+    }
+  }
+}
+```
+
+### Anthropic subscription + API key, MiniMax fallback
+```json5
+{
+  auth: {
+    profiles: {
+      "anthropic:subscription": {
+        provider: "anthropic",
+        mode: "oauth",
+        email: "user@example.com"
+      },
+      "anthropic:api": {
+        provider: "anthropic",
+        mode: "api_key"
+      }
+    },
+    order: {
+      anthropic: ["anthropic:subscription", "anthropic:api"]
+    }
+  },
+  models: {
+    providers: {
+      minimax: {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        apiKey: "${MINIMAX_API_KEY}"
+      }
+    }
+  },
+  agent: {
+    workspace: "~/clawd",
+    model: {
+      primary: "anthropic/claude-opus-4-5",
+      fallbacks: ["minimax/MiniMax-M2.1"]
     }
   }
 }

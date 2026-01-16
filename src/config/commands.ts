@@ -1,5 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import { normalizeChannelId } from "../channels/registry.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { NativeCommandsSetting } from "./types.js";
 
 function resolveAutoDefault(providerId?: ChannelId): boolean {
@@ -16,8 +16,7 @@ export function resolveNativeCommandsEnabled(params: {
   globalSetting?: NativeCommandsSetting;
 }): boolean {
   const { providerId, providerSetting, globalSetting } = params;
-  const setting =
-    providerSetting === undefined ? globalSetting : providerSetting;
+  const setting = providerSetting === undefined ? globalSetting : providerSetting;
   if (setting === true) return true;
   if (setting === false) return false;
   // auto or undefined -> heuristic

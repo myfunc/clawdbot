@@ -28,6 +28,7 @@ import type {
 import type {
   ConfigApplyParamsSchema,
   ConfigGetParamsSchema,
+  ConfigPatchParamsSchema,
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
@@ -58,6 +59,7 @@ import type {
 import type {
   ChatAbortParamsSchema,
   ChatEventSchema,
+  ChatInjectParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
 } from "./logs-chat.js";
@@ -80,11 +82,7 @@ import type {
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
 } from "./sessions.js";
-import type {
-  PresenceEntrySchema,
-  SnapshotSchema,
-  StateVersionSchema,
-} from "./snapshot.js";
+import type { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import type {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -128,6 +126,7 @@ export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
 export type ConfigGetParams = Static<typeof ConfigGetParamsSchema>;
 export type ConfigSetParams = Static<typeof ConfigSetParamsSchema>;
 export type ConfigApplyParams = Static<typeof ConfigApplyParamsSchema>;
+export type ConfigPatchParams = Static<typeof ConfigPatchParamsSchema>;
 export type ConfigSchemaParams = Static<typeof ConfigSchemaParamsSchema>;
 export type ConfigSchemaResponse = Static<typeof ConfigSchemaResponseSchema>;
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
@@ -165,6 +164,7 @@ export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
 export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
 export type LogsTailResult = Static<typeof LogsTailResultSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
+export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
 export type TickEvent = Static<typeof TickEventSchema>;

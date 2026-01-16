@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ClawdbotConfig, SkillConfig } from "../../config/config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import type { SkillEntry } from "./types.js";
+import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -16,10 +16,7 @@ function isTruthy(value: unknown): boolean {
   return true;
 }
 
-export function resolveConfigPath(
-  config: ClawdbotConfig | undefined,
-  pathStr: string,
-) {
+export function resolveConfigPath(config: ClawdbotConfig | undefined, pathStr: string) {
   const parts = pathStr.split(".").filter(Boolean);
   let current: unknown = config;
   for (const part of parts) {
@@ -29,10 +26,7 @@ export function resolveConfigPath(
   return current;
 }
 
-export function isConfigPathTruthy(
-  config: ClawdbotConfig | undefined,
-  pathStr: string,
-): boolean {
+export function isConfigPathTruthy(config: ClawdbotConfig | undefined, pathStr: string): boolean {
   const value = resolveConfigPath(config, pathStr);
   if (value === undefined && pathStr in DEFAULT_CONFIG_VALUES) {
     return DEFAULT_CONFIG_VALUES[pathStr] === true;
@@ -66,16 +60,11 @@ function isBundledSkill(entry: SkillEntry): boolean {
   return entry.skill.source === "clawdbot-bundled";
 }
 
-export function resolveBundledAllowlist(
-  config?: ClawdbotConfig,
-): string[] | undefined {
+export function resolveBundledAllowlist(config?: ClawdbotConfig): string[] | undefined {
   return normalizeAllowlist(config?.skills?.allowBundled);
 }
 
-export function isBundledSkillAllowed(
-  entry: SkillEntry,
-  allowlist?: string[],
-): boolean {
+export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
   if (!allowlist || allowlist.length === 0) return true;
   if (!isBundledSkill(entry)) return true;
   const key = resolveSkillKey(entry.skill, entry);
@@ -100,16 +89,22 @@ export function hasBinary(bin: string): boolean {
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: ClawdbotConfig;
+  eligibility?: SkillEligibilityContext;
 }): boolean {
-  const { entry, config } = params;
+  const { entry, config, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
   const osList = entry.clawdbot?.os ?? [];
+  const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   if (skillConfig?.enabled === false) return false;
   if (!isBundledSkillAllowed(entry, allowBundled)) return false;
-  if (osList.length > 0 && !osList.includes(resolveRuntimePlatform())) {
+  if (
+    osList.length > 0 &&
+    !osList.includes(resolveRuntimePlatform()) &&
+    !remotePlatforms.some((platform) => osList.includes(platform))
+  ) {
     return false;
   }
   if (entry.clawdbot?.always === true) {
@@ -119,12 +114,16 @@ export function shouldIncludeSkill(params: {
   const requiredBins = entry.clawdbot?.requires?.bins ?? [];
   if (requiredBins.length > 0) {
     for (const bin of requiredBins) {
-      if (!hasBinary(bin)) return false;
+      if (hasBinary(bin)) continue;
+      if (eligibility?.remote?.hasBin?.(bin)) continue;
+      return false;
     }
   }
   const requiredAnyBins = entry.clawdbot?.requires?.anyBins ?? [];
   if (requiredAnyBins.length > 0) {
-    const anyFound = requiredAnyBins.some((bin) => hasBinary(bin));
+    const anyFound =
+      requiredAnyBins.some((bin) => hasBinary(bin)) ||
+      eligibility?.remote?.hasAnyBin?.(requiredAnyBins);
     if (!anyFound) return false;
   }
 

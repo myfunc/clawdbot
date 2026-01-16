@@ -16,13 +16,9 @@ const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({ exists: false, valid: true, config: {} })),
 );
-const ensureSystemdUserLingerInteractive = vi.hoisted(() =>
-  vi.fn(async () => {}),
-);
+const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
-const ensureControlUiAssetsBuilt = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true })),
-);
+const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../commands/onboard-channels.js", () => ({
@@ -47,8 +43,7 @@ vi.mock("../config/config.js", async (importActual) => {
 });
 
 vi.mock("../commands/onboard-helpers.js", async (importActual) => {
-  const actual =
-    await importActual<typeof import("../commands/onboard-helpers.js")>();
+  const actual = await importActual<typeof import("../commands/onboard-helpers.js")>();
   return {
     ...actual,
     ensureWorkspaceAndSessions,
@@ -115,6 +110,7 @@ describe("runOnboardingWizard", () => {
     await expect(
       runOnboardingWizard(
         {
+          acceptRisk: true,
           flow: "quickstart",
           authChoice: "skip",
           installDaemon: false,
@@ -155,6 +151,7 @@ describe("runOnboardingWizard", () => {
 
     await runOnboardingWizard(
       {
+        acceptRisk: true,
         flow: "quickstart",
         authChoice: "skip",
         installDaemon: false,
@@ -177,13 +174,8 @@ describe("runOnboardingWizard", () => {
   it("launches TUI without auto-delivery when hatching", async () => {
     runTui.mockClear();
 
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-onboard-"),
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME),
-      "{}",
-    );
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-"));
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
 
     const confirm: WizardPrompter["confirm"] = vi.fn(async (opts) => {
       if (opts.message === "Do you want to hatch your bot now?") return true;
@@ -211,6 +203,7 @@ describe("runOnboardingWizard", () => {
 
     await runOnboardingWizard(
       {
+        acceptRisk: true,
         flow: "quickstart",
         mode: "local",
         workspace: workspaceDir,
@@ -232,5 +225,56 @@ describe("runOnboardingWizard", () => {
     );
 
     await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("shows the web search hint at the end of onboarding", async () => {
+    const prevBraveKey = process.env.BRAVE_API_KEY;
+    delete process.env.BRAVE_API_KEY;
+
+    try {
+      const note: WizardPrompter["note"] = vi.fn(async () => {});
+      const prompter: WizardPrompter = {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note,
+        select: vi.fn(async () => "quickstart"),
+        multiselect: vi.fn(async () => []),
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async () => false),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      };
+
+      const runtime: RuntimeEnv = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+
+      const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall?.[1]).toBe("Web search (optional)");
+    } finally {
+      if (prevBraveKey === undefined) {
+        delete process.env.BRAVE_API_KEY;
+      } else {
+        process.env.BRAVE_API_KEY = prevBraveKey;
+      }
+    }
   });
 });

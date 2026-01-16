@@ -30,19 +30,189 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   );
 }
 
+const ERROR_PAYLOAD_PREFIX_RE =
+  /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
+const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const ERROR_PREFIX_RE =
+  /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
+const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
+const HTTP_ERROR_HINTS = [
+  "error",
+  "bad request",
+  "not found",
+  "unauthorized",
+  "forbidden",
+  "internal server",
+  "service unavailable",
+  "gateway",
+  "rate limit",
+  "overloaded",
+  "timeout",
+  "timed out",
+  "invalid",
+  "too many requests",
+  "permission",
+];
+
+function stripFinalTagsFromText(text: string): string {
+  if (!text) return text;
+  return text.replace(FINAL_TAG_RE, "");
+}
+
+function isLikelyHttpErrorText(raw: string): boolean {
+  const match = raw.match(HTTP_STATUS_PREFIX_RE);
+  if (!match) return false;
+  const code = Number(match[1]);
+  if (!Number.isFinite(code) || code < 400) return false;
+  const message = match[2].toLowerCase();
+  return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
+}
+
+type ErrorPayload = Record<string, unknown>;
+
+function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const record = payload as ErrorPayload;
+  if (record.type === "error") return true;
+  if (typeof record.request_id === "string" || typeof record.requestId === "string") return true;
+  if ("error" in record) {
+    const err = record.error;
+    if (err && typeof err === "object" && !Array.isArray(err)) {
+      const errRecord = err as ErrorPayload;
+      if (
+        typeof errRecord.message === "string" ||
+        typeof errRecord.type === "string" ||
+        typeof errRecord.code === "string"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function parseApiErrorPayload(raw: string): ErrorPayload | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const candidates = [trimmed];
+  if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
+    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
+  }
+  for (const candidate of candidates) {
+    if (!candidate.startsWith("{") || !candidate.endsWith("}")) continue;
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (isErrorPayloadObject(parsed)) return parsed;
+    } catch {
+      // ignore parse errors
+    }
+  }
+  return null;
+}
+
+function stableStringify(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
+  return `{${entries.join(",")}}`;
+}
+
+export function getApiErrorPayloadFingerprint(raw?: string): string | null {
+  if (!raw) return null;
+  const payload = parseApiErrorPayload(raw);
+  if (!payload) return null;
+  return stableStringify(payload);
+}
+
+export function isRawApiErrorPayload(raw?: string): boolean {
+  return getApiErrorPayloadFingerprint(raw) !== null;
+}
+
+export type ApiErrorInfo = {
+  httpCode?: string;
+  type?: string;
+  message?: string;
+  requestId?: string;
+};
+
+export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  let httpCode: string | undefined;
+  let candidate = trimmed;
+
+  const httpPrefixMatch = candidate.match(/^(\d{3})\s+(.+)$/s);
+  if (httpPrefixMatch) {
+    httpCode = httpPrefixMatch[1];
+    candidate = httpPrefixMatch[2].trim();
+  }
+
+  const payload = parseApiErrorPayload(candidate);
+  if (!payload) return null;
+
+  const requestId =
+    typeof payload.request_id === "string"
+      ? payload.request_id
+      : typeof payload.requestId === "string"
+        ? payload.requestId
+        : undefined;
+
+  const topType = typeof payload.type === "string" ? payload.type : undefined;
+  const topMessage = typeof payload.message === "string" ? payload.message : undefined;
+
+  let errType: string | undefined;
+  let errMessage: string | undefined;
+  if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
+    const err = payload.error as Record<string, unknown>;
+    if (typeof err.type === "string") errType = err.type;
+    if (typeof err.code === "string" && !errType) errType = err.code;
+    if (typeof err.message === "string") errMessage = err.message;
+  }
+
+  return {
+    httpCode,
+    type: errType ?? topType,
+    message: errMessage ?? topMessage,
+    requestId,
+  };
+}
+
+export function formatRawAssistantErrorForUi(raw?: string): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return "LLM request failed with an unknown error.";
+
+  const info = parseApiErrorInfo(trimmed);
+  if (info?.message) {
+    const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
+    const type = info.type ? ` ${info.type}` : "";
+    const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
+    return `${prefix}${type}: ${info.message}${requestId}`;
+  }
+
+  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+}
+
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: ClawdbotConfig; sessionKey?: string },
 ): string | undefined {
-  if (msg.stopReason !== "error") return undefined;
+  // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
+  if (msg.stopReason !== "error" && !raw) return undefined;
   if (!raw) return "LLM request failed with an unknown error.";
 
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
-    raw.match(
-      /tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i,
-    );
+    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
@@ -59,16 +229,19 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (/incorrect role information|roles must alternate/i.test(raw)) {
+  // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
+  if (
+    /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
+      raw,
+    )
+  ) {
     return (
       "Message ordering conflict - please try again. " +
       "If this persists, use /new to start a fresh session."
     );
   }
 
-  const invalidRequest = raw.match(
-    /"type":"invalid_request_error".*?"message":"([^"]+)"/,
-  );
+  const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
@@ -77,12 +250,55 @@ export function formatAssistantErrorText(
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
 
+  if (isRawApiErrorPayload(raw)) {
+    return "The AI service returned an error. Please try again.";
+  }
+
+  // Never return raw unhandled errors - log for debugging but return safe message
+  if (raw.length > 600) {
+    console.warn("[formatAssistantErrorText] Long error truncated:", raw.slice(0, 200));
+  }
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function isRateLimitAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function sanitizeUserFacingText(text: string): string {
+  if (!text) return text;
+  const stripped = stripFinalTagsFromText(text);
+  const trimmed = stripped.trim();
+  if (!trimmed) return stripped;
+
+  if (/incorrect role information|roles must alternate/i.test(trimmed)) {
+    return (
+      "Message ordering conflict - please try again. " +
+      "If this persists, use /new to start a fresh session."
+    );
+  }
+
+  if (isContextOverflowError(trimmed)) {
+    return (
+      "Context overflow: prompt too large for the model. " +
+      "Try again with less input or a larger-context model."
+    );
+  }
+
+  if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
+    return "The AI service returned an error. Please try again.";
+  }
+
+  if (ERROR_PREFIX_RE.test(trimmed)) {
+    if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
+      return "The AI service is temporarily overloaded. Please try again in a moment.";
+    }
+    if (isTimeoutErrorMessage(trimmed)) {
+      return "LLM request timed out.";
+    }
+    return "The AI service returned an error. Please try again.";
+  }
+
+  return stripped;
+}
+
+export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isRateLimitErrorMessage(msg.errorMessage ?? "");
 }
@@ -98,16 +314,8 @@ const ERROR_PATTERNS = {
     "resource_exhausted",
     "usage limit",
   ],
-  overloaded: [
-    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
-    "overloaded",
-  ],
-  timeout: [
-    "timeout",
-    "timed out",
-    "deadline exceeded",
-    "context deadline exceeded",
-  ],
+  overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
+  timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
   billing: [
     /\b402\b/,
     "payment required",
@@ -140,10 +348,7 @@ const ERROR_PATTERNS = {
   ],
 } as const;
 
-function matchesErrorPatterns(
-  raw: string,
-  patterns: readonly ErrorPattern[],
-): boolean {
+function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
   if (!raw) return false;
   const value = raw.toLowerCase();
   return patterns.some((pattern) =>
@@ -172,9 +377,7 @@ export function isBillingErrorMessage(raw: string): boolean {
   );
 }
 
-export function isBillingAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
@@ -191,9 +394,7 @@ export function isCloudCodeAssistFormatError(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
-export function isAuthAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
@@ -212,9 +413,7 @@ export function isFailoverErrorMessage(raw: string): boolean {
   return classifyFailoverReason(raw) !== null;
 }
 
-export function isFailoverAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isFailoverErrorMessage(msg.errorMessage ?? "");
 }

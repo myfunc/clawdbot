@@ -31,6 +31,16 @@ Minimal config:
 - Deterministic routing: replies return to WhatsApp, no model routing.
 - Model sees enough context to understand quoted replies.
 
+## Config writes
+By default, WhatsApp is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { whatsapp: { configWrites: false } }
+}
+```
+
 ## Architecture (who owns what)
 - **Gateway** owns the Baileys socket and inbox loop.
 - **CLI / macOS app** talk to the gateway; no direct Baileys use.
@@ -127,6 +137,32 @@ Behavior:
 - Inbound unknown senders still follow `channels.whatsapp.dmPolicy`.
 - Self-chat mode (allowFrom includes your number) avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
+
+## Read receipts
+By default, the gateway marks inbound WhatsApp messages as read (blue ticks) once they are accepted.
+
+Disable globally:
+```json5
+{
+  channels: { whatsapp: { sendReadReceipts: false } }
+}
+```
+
+Disable per account:
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        personal: { sendReadReceipts: false }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Self-chat mode always skips read receipts.
 
 ## WhatsApp FAQ: sending messages + pairing
 
@@ -260,8 +296,9 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 
 ## Heartbeats
 - **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
-- **Agent heartbeat** is global (`agents.defaults.heartbeat.*`) and runs in the main session.
-  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`) + `HEARTBEAT_OK` skip behavior.
+- **Agent heartbeat** can be configured per agent (`agents.list[].heartbeat`) or globally
+  via `agents.defaults.heartbeat` (fallback when no per-agent entries are set).
+  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK` skip behavior.
   - Delivery defaults to the last used channel (or configured target).
 
 ## Reconnect behavior
@@ -282,6 +319,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 - `channels.whatsapp.groupAllowFrom` (group sender allowlist).
 - `channels.whatsapp.groupPolicy` (group policy).
 - `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (group history context; `0` disables).
+- `channels.whatsapp.dmHistoryLimit` (DM history limit in user turns). Per-user overrides: `channels.whatsapp.dms["<phone>"].historyLimit`.
 - `channels.whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `channels.whatsapp.actions.reactions` (gate WhatsApp tool reactions).
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`)
@@ -293,6 +331,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 - `agents.defaults.heartbeat.model` (optional override)
 - `agents.defaults.heartbeat.target`
 - `agents.defaults.heartbeat.to`
+- `agents.list[].heartbeat.*` (per-agent overrides)
 - `session.*` (scope, idle, store, mainKey)
 - `web.enabled` (disable channel startup when false)
 - `web.heartbeatSeconds`

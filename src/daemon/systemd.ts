@@ -10,6 +10,7 @@ import {
 } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import { resolveHomeDir } from "./paths.js";
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,
@@ -22,55 +23,34 @@ import {
 } from "./systemd-unit.js";
 
 const execFileAsync = promisify(execFile);
+const toPosixPath = (value: string) => value.replace(/\\/g, "/");
 
 const formatLine = (label: string, value: string) => {
   const rich = isRich();
   return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
 };
 
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) throw new Error("Missing HOME");
-  return home;
-}
-
 function resolveSystemdUnitPathForName(
   env: Record<string, string | undefined>,
   name: string,
 ): string {
-  const home = resolveHomeDir(env);
-  return path.join(home, ".config", "systemd", "user", `${name}.service`);
+  const home = toPosixPath(resolveHomeDir(env));
+  return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
 
-function resolveSystemdServiceName(
-  env: Record<string, string | undefined>,
-): string {
+function resolveSystemdServiceName(env: Record<string, string | undefined>): string {
   const override = env.CLAWDBOT_SYSTEMD_UNIT?.trim();
   if (override) {
-    return override.endsWith(".service")
-      ? override.slice(0, -".service".length)
-      : override;
+    return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
   }
   return resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
 }
 
-function resolveSystemdServiceNameFromParams(params?: {
-  env?: Record<string, string | undefined>;
-  profile?: string;
-}): string {
-  if (params?.env) return resolveSystemdServiceName(params.env);
-  return resolveGatewaySystemdServiceName(params?.profile);
-}
-
-function resolveSystemdUnitPath(
-  env: Record<string, string | undefined>,
-): string {
+function resolveSystemdUnitPath(env: Record<string, string | undefined>): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
-export function resolveSystemdUserUnitPath(
-  env: Record<string, string | undefined>,
-): string {
+export function resolveSystemdUserUnitPath(env: Record<string, string | undefined>): string {
   return resolveSystemdUnitPath(env);
 }
 
@@ -171,11 +151,7 @@ async function execSystemctl(
     return {
       stdout: typeof e.stdout === "string" ? e.stdout : "",
       stderr:
-        typeof e.stderr === "string"
-          ? e.stderr
-          : typeof e.message === "string"
-            ? e.message
-            : "",
+        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
       code: typeof e.code === "number" ? e.code : 1,
     };
   }
@@ -199,13 +175,9 @@ async function assertSystemdAvailable() {
   if (res.code === 0) return;
   const detail = res.stderr || res.stdout;
   if (detail.toLowerCase().includes("not found")) {
-    throw new Error(
-      "systemctl not available; systemd user services are required on Linux.",
-    );
+    throw new Error("systemctl not available; systemd user services are required on Linux.");
   }
-  throw new Error(
-    `systemctl --user unavailable: ${detail || "unknown error"}`.trim(),
-  );
+  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
 export async function installSystemdService({
@@ -227,8 +199,7 @@ export async function installSystemdService({
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   const description = formatGatewayServiceDescription({
     profile: env.CLAWDBOT_PROFILE,
-    version:
-      environment?.CLAWDBOT_SERVICE_VERSION ?? env.CLAWDBOT_SERVICE_VERSION,
+    version: environment?.CLAWDBOT_SERVICE_VERSION ?? env.CLAWDBOT_SERVICE_VERSION,
   });
   const unit = buildSystemdUnit({
     description,
@@ -242,25 +213,21 @@ export async function installSystemdService({
   const unitName = `${serviceName}.service`;
   const reload = await execSystemctl(["--user", "daemon-reload"]);
   if (reload.code !== 0) {
-    throw new Error(
-      `systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim(),
-    );
+    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
   }
 
   const enable = await execSystemctl(["--user", "enable", unitName]);
   if (enable.code !== 0) {
-    throw new Error(
-      `systemctl enable failed: ${enable.stderr || enable.stdout}`.trim(),
-    );
+    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
   }
 
   const restart = await execSystemctl(["--user", "restart", unitName]);
   if (restart.code !== 0) {
-    throw new Error(
-      `systemctl restart failed: ${restart.stderr || restart.stdout}`.trim(),
-    );
+    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
 
+  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+  stdout.write("\n");
   stdout.write(`${formatLine("Installed systemd service", unitPath)}\n`);
   return { unitPath };
 }
@@ -289,20 +256,16 @@ export async function uninstallSystemdService({
 export async function stopSystemdService({
   stdout,
   env,
-  profile,
 }: {
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
-  profile?: string;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveSystemdServiceNameFromParams({ env, profile });
+  const serviceName = resolveSystemdServiceName(env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "stop", unitName]);
   if (res.code !== 0) {
-    throw new Error(
-      `systemctl stop failed: ${res.stderr || res.stdout}`.trim(),
-    );
+    throw new Error(`systemctl stop failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Stopped systemd service", unitName)}\n`);
 }
@@ -310,40 +273,32 @@ export async function stopSystemdService({
 export async function restartSystemdService({
   stdout,
   env,
-  profile,
 }: {
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
-  profile?: string;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveSystemdServiceNameFromParams({ env, profile });
+  const serviceName = resolveSystemdServiceName(env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "restart", unitName]);
   if (res.code !== 0) {
-    throw new Error(
-      `systemctl restart failed: ${res.stderr || res.stdout}`.trim(),
-    );
+    throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
 }
 
-export async function isSystemdServiceEnabled(params?: {
+export async function isSystemdServiceEnabled(args: {
   env?: Record<string, string | undefined>;
-  profile?: string;
 }): Promise<boolean> {
   await assertSystemdAvailable();
-  const serviceName = resolveSystemdServiceNameFromParams(params);
+  const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
   return res.code === 0;
 }
 
 export async function readSystemdServiceRuntime(
-  env: Record<string, string | undefined> = process.env as Record<
-    string,
-    string | undefined
-  >,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): Promise<GatewayServiceRuntime> {
   try {
     await assertSystemdAvailable();
@@ -374,8 +329,7 @@ export async function readSystemdServiceRuntime(
   }
   const parsed = parseSystemdShow(res.stdout || "");
   const activeState = parsed.activeState?.toLowerCase();
-  const status =
-    activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
   return {
     status,
     state: parsed.activeState,
@@ -415,11 +369,7 @@ export async function findLegacySystemdUnits(
     }
     let enabled = false;
     if (systemctlAvailable) {
-      const res = await execSystemctl([
-        "--user",
-        "is-enabled",
-        `${name}.service`,
-      ]);
+      const res = await execSystemctl(["--user", "is-enabled", `${name}.service`]);
       enabled = res.code === 0;
     }
     if (exists || enabled) {
@@ -442,23 +392,14 @@ export async function uninstallLegacySystemdUnits({
   const systemctlAvailable = await isSystemctlAvailable();
   for (const unit of units) {
     if (systemctlAvailable) {
-      await execSystemctl([
-        "--user",
-        "disable",
-        "--now",
-        `${unit.name}.service`,
-      ]);
+      await execSystemctl(["--user", "disable", "--now", `${unit.name}.service`]);
     } else {
-      stdout.write(
-        `systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`,
-      );
+      stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
     }
 
     try {
       await fs.unlink(unit.unitPath);
-      stdout.write(
-        `${formatLine("Removed legacy systemd service", unit.unitPath)}\n`,
-      );
+      stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
     } catch {
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
     }

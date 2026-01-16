@@ -4,17 +4,15 @@ import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import {
-  createAgentSession,
-  SessionManager,
-  SettingsManager,
-} from "@mariozechner/pi-coding-agent";
+import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveClawdbotAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
@@ -41,19 +39,14 @@ import {
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
-import {
-  filterBootstrapFilesForSession,
-  loadWorkspaceBootstrapFiles,
-} from "../../workspace.js";
+import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "../../workspace.js";
 
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import { logToolSchemasForGoogle, sanitizeSessionHistory } from "../google.js";
-import {
-  getDmHistoryLimitFromSessionKey,
-  limitHistoryTurns,
-} from "../history.js";
+import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -62,27 +55,15 @@ import {
   setActiveEmbeddedRun,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
-import {
-  prewarmSessionFile,
-  trackSessionManagerAccess,
-} from "../session-manager-cache.js";
+import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import {
-  buildEmbeddedSystemPrompt,
-  createSystemPromptOverride,
-} from "../system-prompt.js";
+import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
-import {
-  formatUserTime,
-  mapThinkingLevel,
-  resolveExecToolDefaults,
-  resolveUserTimezone,
-} from "../utils.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../../date-time.js";
+import { mapThinkingLevel, resolveExecToolDefaults } from "../utils.js";
+import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "./types.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
@@ -113,8 +94,7 @@ export async function runEmbeddedAttempt(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    const shouldLoadSkillEntries =
-      !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+    const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];
@@ -171,9 +151,7 @@ export async function runEmbeddedAttempt(
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
     const machineName = await getMachineDisplayName();
-    const runtimeChannel = normalizeMessageChannel(
-      params.messageChannel ?? params.messageProvider,
-    );
+    const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     const runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
           cfg: params.config,
@@ -181,6 +159,17 @@ export async function runEmbeddedAttempt(
           accountId: params.agentAccountId,
         }) ?? [])
       : undefined;
+    const reactionGuidance =
+      runtimeChannel === "telegram" && params.config
+        ? (() => {
+            const resolved = resolveTelegramReactionLevel({
+              cfg: params.config,
+              accountId: params.agentAccountId ?? undefined,
+            });
+            const level = resolved.agentReactionGuidance;
+            return level ? { level, channel: "Telegram" } : undefined;
+          })()
+        : undefined;
     const runtimeInfo = {
       host: machineName,
       os: `${os.type()} ${os.release()}`,
@@ -193,15 +182,15 @@ export async function runEmbeddedAttempt(
 
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
-    const userTimezone = resolveUserTimezone(
-      params.config?.agents?.defaults?.userTimezone,
-    );
-    const userTime = formatUserTime(new Date(), userTimezone);
+    const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
+    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+    const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
+    const promptMode = isSubagentSessionKey(params.sessionKey) ? "minimal" : "full";
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -211,18 +200,41 @@ export async function runEmbeddedAttempt(
       ownerNumbers: params.ownerNumbers,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
-        ? resolveHeartbeatPrompt(
-            params.config?.agents?.defaults?.heartbeat?.prompt,
-          )
+        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
         : undefined,
       skillsPrompt,
+      reactionGuidance,
+      promptMode,
       runtimeInfo,
       sandboxInfo,
       tools,
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,
       userTime,
+      userTimeFormat,
       contextFiles,
+    });
+    const systemPromptReport = buildSystemPromptReport({
+      source: "run",
+      generatedAt: Date.now(),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: params.modelId,
+      workspaceDir: effectiveWorkspace,
+      bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
+      sandbox: (() => {
+        const runtime = resolveSandboxRuntimeStatus({
+          cfg: params.config,
+          sessionKey: params.sessionKey ?? params.sessionId,
+        });
+        return { mode: runtime.mode, sandboxed: runtime.sandboxed };
+      })(),
+      systemPrompt: appendPrompt,
+      bootstrapFiles,
+      injectedFiles: contextFiles,
+      skillsPrompt,
+      tools,
     });
     const systemPrompt = createSystemPromptOverride(appendPrompt);
 
@@ -231,9 +243,7 @@ export async function runEmbeddedAttempt(
     });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
-    let session:
-      | Awaited<ReturnType<typeof createAgentSession>>["session"]
-      | undefined;
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     try {
       const hadSessionFile = await fs
         .stat(params.sessionFile)
@@ -241,9 +251,7 @@ export async function runEmbeddedAttempt(
         .catch(() => false);
 
       await prewarmSessionFile(params.sessionFile);
-      sessionManager = guardSessionManager(
-        SessionManager.open(params.sessionFile),
-      );
+      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile));
       trackSessionManagerAccess(params.sessionFile);
 
       await prepareSessionManagerForRun({
@@ -254,10 +262,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
       });
 
-      const settingsManager = SettingsManager.create(
-        effectiveWorkspace,
-        agentDir,
-      );
+      const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
       ensurePiCompactionReserveTokens({
         settingsManager,
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
@@ -312,6 +317,7 @@ export async function runEmbeddedAttempt(
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
+          modelId: params.modelId,
           sessionManager,
           sessionId: params.sessionId,
         });
@@ -412,17 +418,37 @@ export async function runEmbeddedAttempt(
       let promptError: unknown = null;
       try {
         const promptStartedAt = Date.now();
-        log.debug(
-          `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
-        );
-        try {
-          await activeSession.prompt(params.prompt, { images: params.images });
-        } catch (err) {
-          promptError = err;
-        } finally {
-          log.debug(
-            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+        log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
+
+        // Check if last message is a user message to prevent consecutive user turns
+        const lastMsg = activeSession.messages[activeSession.messages.length - 1];
+        const lastMsgRole =
+          lastMsg && typeof lastMsg === "object" ? (lastMsg as { role?: unknown }).role : undefined;
+
+        if (lastMsgRole === "user") {
+          // Last message was a user message. Adding another user message would create
+          // consecutive user turns, violating Anthropic's role ordering requirement.
+          // This can happen when:
+          // 1. A previous heartbeat didn't get a response
+          // 2. A user message errored before getting an assistant response
+          // Skip this prompt to prevent "400 Incorrect role information" error.
+          log.warn(
+            `Skipping prompt because last message is a user message (would create consecutive user turns). ` +
+              `runId=${params.runId} sessionId=${params.sessionId}`,
           );
+          promptError = new Error(
+            "Incorrect role information: consecutive user messages would violate role ordering",
+          );
+        } else {
+          try {
+            await activeSession.prompt(params.prompt, { images: params.images });
+          } catch (err) {
+            promptError = err;
+          } finally {
+            log.debug(
+              `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+            );
+          }
         }
 
         try {
@@ -448,15 +474,12 @@ export async function runEmbeddedAttempt(
       const lastAssistant = messagesSnapshot
         .slice()
         .reverse()
-        .find((m) => (m as AgentMessage)?.role === "assistant") as
-        | AssistantMessage
-        | undefined;
+        .find((m) => (m as AgentMessage)?.role === "assistant") as AssistantMessage | undefined;
 
       const toolMetasNormalized = toolMetas
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>
-            typeof entry.toolName === "string" &&
-            entry.toolName.trim().length > 0,
+            typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
@@ -465,6 +488,7 @@ export async function runEmbeddedAttempt(
         timedOut,
         promptError,
         sessionIdUsed,
+        systemPromptReport,
         messagesSnapshot,
         assistantTexts,
         toolMetas: toolMetasNormalized,
@@ -473,8 +497,7 @@ export async function runEmbeddedAttempt(
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
         cloudCodeAssistFormatError: Boolean(
-          lastAssistant?.errorMessage &&
-            isCloudCodeAssistFormatError(lastAssistant.errorMessage),
+          lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
       };
     } finally {

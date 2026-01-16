@@ -15,16 +15,12 @@ export function listPairingChannels(): ChannelId[] {
     .map((plugin) => plugin.id);
 }
 
-export function getPairingAdapter(
-  channelId: ChannelId,
-): ChannelPairingAdapter | null {
+export function getPairingAdapter(channelId: ChannelId): ChannelPairingAdapter | null {
   const plugin = getChannelPlugin(channelId);
   return plugin?.pairing ?? null;
 }
 
-export function requirePairingAdapter(
-  channelId: ChannelId,
-): ChannelPairingAdapter {
+export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapter {
   const adapter = getPairingAdapter(channelId);
   if (!adapter) {
     throw new Error(`Channel ${channelId} does not support pairing`);
@@ -57,8 +53,11 @@ export async function notifyPairingApproved(params: {
   id: string;
   cfg: ClawdbotConfig;
   runtime?: RuntimeEnv;
+  /** Extension channels can pass their adapter directly to bypass registry lookup. */
+  pairingAdapter?: ChannelPairingAdapter;
 }): Promise<void> {
-  const adapter = requirePairingAdapter(params.channelId);
+  // Extensions may provide adapter directly to bypass ESM module isolation
+  const adapter = params.pairingAdapter ?? requirePairingAdapter(params.channelId);
   if (!adapter.notifyApproval) return;
   await adapter.notifyApproval({
     cfg: params.cfg,

@@ -1,9 +1,131 @@
 # Changelog
 
-## 2026.1.14
+## 2026.1.15 (unreleased)
+
+- **BREAKING:** Microsoft Teams is now a plugin; install `@clawdbot/msteams` via `clawdbot plugins install @clawdbot/msteams`.
+- CLI: set process titles to `clawdbot-<command>` for clearer process listings.
+- Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
+- Sessions/Security: add `session.dmScope` for multi-user DM isolation and audit warnings. (#948) — thanks @Alphonse-arianee.
+- Plugins: add provider auth registry + `clawdbot models auth login` for plugin-driven OAuth/API key flows.
+- Onboarding: switch channels setup to a single-select loop with per-channel actions and disabled hints in the picker.
+- TUI: show provider/model labels for the active session and default model.
+- Heartbeat: add per-agent heartbeat configuration and multi-agent docs example.
+- Fix: list model picker entries as provider/model pairs for explicit selection. (#970) — thanks @mcinteerj.
+- Fix: persist `gateway.mode=local` after selecting Local run mode in `clawdbot configure`, even if no other sections are chosen.
+- Daemon: fix profile-aware service label resolution (env-driven) and add coverage for launchd/systemd/schtasks. (#969) — thanks @bjesuiter.
+- Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
+- Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
+- Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
+- Agents: avoid false positives when logging unsupported Google tool schema keywords.
+- Status: restore usage summary line for current provider when no OAuth profiles exist.
+- Tools: normalize Slack/Discord message timestamps with `timestampMs`/`timestampUtc` while keeping raw provider fields.
+- Docs: add Date & Time guide and update prompt/timezone configuration docs.
+- Messages: debounce rapid inbound messages across channels with per-connector overrides. (#971) — thanks @juanpablodlc.
+- Messages: allow media-only sends (CLI/tool) and show Telegram voice recording status for voice notes. (#957) — thanks @rdev.
+- Auth/Status: keep auth profiles sticky per session (rotate on compaction/new), surface provider usage headers in `/status` and `clawdbot models status`, and update docs.
+- Fix: guard model fallback against undefined provider/model values. (#954) — thanks @roshanasingh4.
+- Fix: refactor session store updates, add chat.inject, and harden subagent cleanup flow. (#944) — thanks @tyler6204.
+- Fix: clean up suspended CLI processes across backends. (#978) — thanks @Nachx639.
+- Memory: make `node-llama-cpp` an optional dependency (avoid Node 25 install failures) and improve local-embeddings fallback/errors.
+- Browser: add `snapshot refs=aria` (Playwright aria-ref ids) for self-resolving refs across `snapshot` → `act`.
+- Browser: `profile="chrome"` now defaults to host control and returns clearer “attach a tab” errors.
+- Browser: extension mode recovers when only one tab is attached (stale targetId fallback).
+- Browser: prefer stable Chrome for auto-detect, with Brave/Edge fallbacks and updated docs. (#983) — thanks @cpojer.
+- Browser: fix `tab not found` for extension relay snapshots/actions when Playwright blocks `newCDPSession` (use the single available Page).
+- Telegram: add bidirectional reaction support with configurable notifications and agent guidance. (#964) — thanks @bohdanpodvirnyi.
+- Telegram: skip `message_thread_id=1` for General topic sends while keeping typing indicators. (#848) — thanks @azade-c.
+- Discord: allow allowlisted guilds without channel lists to receive messages when `groupPolicy="allowlist"`. — thanks @thewilloftheshadow.
+- Fix: sanitize user-facing error text + strip `<final>` tags across reply pipelines. (#975) — thanks @ThomsenDrake.
+- Fix: normalize pairing CLI aliases, allow extension channels, and harden Zalo webhook payload parsing. (#991) — thanks @longmaba.
+
+## 2026.1.14-1
+
+### Highlights
+- Web search: `web_search`/`web_fetch` tools (Brave API) + first-time setup in onboarding/configure.
+- Browser control: Chrome extension relay takeover mode + remote browser control via `clawdbot browser serve`.
+- Plugins: channel plugins (gateway HTTP hooks) + Zalo plugin + onboarding install flow. (#854) — thanks @longmaba.
+- Security: expanded `clawdbot security audit` (+ `--fix`), detect-secrets CI scan, and a `SECURITY.md` reporting policy.
+
+### Changes
+- Docs: clarify per-agent auth stores, sandboxed skill binaries, and elevated semantics.
+- Docs: add FAQ entries for missing provider auth after adding agents and Gemini thinking signature errors.
+- Agents: add optional auth-profile copy prompt on `agents add` and improve auth error messaging.
+- Security: expand `clawdbot security audit` checks (model hygiene, config includes, plugin allowlists, exposure matrix) and extend `--fix` to tighten more sensitive state paths.
+- Security: add `SECURITY.md` reporting policy.
+- Channels: add Matrix plugin (external) with docs + onboarding hooks.
+- Plugins: add Zalo channel plugin with gateway HTTP hooks and onboarding install prompt. (#854) — thanks @longmaba.
+- Onboarding: add a security checkpoint prompt (docs link + sandboxing hint); require `--accept-risk` for `--non-interactive`.
+- Docs: expand gateway security hardening guidance and incident response checklist.
+- Docs: document DM history limits for channel DMs. (#883) — thanks @pkrmf.
+- Security: add detect-secrets CI scan and baseline guidance. (#227) — thanks @Hyaxia.
+- Tools: add `web_search`/`web_fetch` (Brave API), auto-enable `web_fetch` for sandboxed sessions, and remove the `brave-search` skill.
+- CLI/Docs: add a web tools configure section for storing Brave API keys and update onboarding tips.
+- Browser: add Chrome extension relay takeover mode (toolbar button), plus `clawdbot browser extension install/path` and remote browser control via `clawdbot browser serve` + `browser.controlToken`.
 
 ### Fixes
+- Sessions: refactor session store updates to lock + mutate per-entry, add chat.inject, and harden subagent cleanup flow. (#944) — thanks @tyler6204.
+- Browser: add tests for snapshot labels/efficient query params and labeled image responses.
+- Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
+- Doctor: avoid re-adding WhatsApp config when only legacy ack reactions are set. (#927, fixes #900) — thanks @grp06.
+- Agents: scrub tuple `items` schemas for Gemini tool calls. (#926, fixes #746) — thanks @grp06.
+- Agents: harden Antigravity Claude history/tool-call sanitization. (#968) — thanks @rdev.
+- Agents: stabilize sub-agent announce status from runtime outcomes and normalize Result/Notes. (#835) — thanks @roshanasingh4.
+- Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
+- Auth: normalize Claude Code CLI profile mode to oauth and auto-migrate config. (#855) — thanks @sebslight.
+- Daemon: clear persisted launchd disabled state before bootstrap (fixes `daemon install` after uninstall). (#849) — thanks @ndraiman.
+- Logging: tolerate `EIO` from console writes to avoid gateway crashes. (#925, fixes #878) — thanks @grp06.
+- Sandbox: restore `docker.binds` config validation for custom bind mounts. (#873) — thanks @akonyer.
+- Sandbox: preserve configured PATH for `docker exec` so custom tools remain available. (#873) — thanks @akonyer.
+- Slack: respect `channels.slack.requireMention` default when resolving channel mention gating. (#850) — thanks @evalexpr.
+- Telegram: aggregate split inbound messages into one prompt (reduces “one reply per fragment”).
+- Auto-reply: treat trailing `NO_REPLY` tokens as silent replies.
+- Config: prevent partial config writes from clobbering unrelated settings (base hash guard + merge patch for connection saves).
+
+## 2026.1.14
+
+### Changes
+- Usage: add MiniMax coding plan usage tracking.
+- Auth: label Claude Code CLI auth options. (#915) — thanks @SeanZoR.
+- Docs: standardize Claude Code CLI naming across docs and prompts. (follow-up to #915)
+- Telegram: add message delete action in the message tool. (#903) — thanks @sleontenko.
+- Config: add `channels.<provider>.configWrites` gating for channel-initiated config writes; migrate Slack channel IDs.
+
+### Fixes
+ - Mac: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
+ - UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
+- TUI: render picker overlays via the overlay stack so /models and /settings display. (#921) — thanks @grizzdank.
+- TUI: add a bright spinner + elapsed time in the status line for send/stream/run states.
+- TUI: show LLM error messages (rate limits, auth, etc.) instead of `(no output)`.
 - Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
+
+#### Agents / Auth / Tools / Sandbox
+- Agents: make user time zone and 24-hour time explicit in the system prompt. (#859) — thanks @CashWilliams.
+- Agents: strip downgraded tool call text without eating adjacent replies and filter thinking-tag leaks. (#905) — thanks @erikpr1994.
+- Agents: cap tool call IDs for OpenAI/OpenRouter to avoid request rejections. (#875) — thanks @j1philli.
+- Agents: scrub tuple `items` schemas for Gemini tool calls. (#926, fixes #746) — thanks @grp06.
+- Agents: stabilize sub-agent announce status from runtime outcomes and normalize Result/Notes. (#835) — thanks @roshanasingh4.
+- Auth: normalize Claude Code CLI profile mode to oauth and auto-migrate config. (#855) — thanks @sebslight.
+- Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
+- Logging: tolerate `EIO` from console writes to avoid gateway crashes. (#925, fixes #878) — thanks @grp06.
+- Sandbox: restore `docker.binds` config validation and preserve configured PATH for `docker exec`. (#873) — thanks @akonyer.
+- Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
+
+#### macOS / Apps
+- macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
+- macOS: format ConnectionsStore config to satisfy SwiftFormat lint. (#852) — thanks @mneves75.
+- macOS: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
+- macOS: reuse launchd gateway auth and skip wizard when gateway config already exists. (#917)
+- macOS: prefer the default bridge tunnel port in remote mode for node bridge connectivity; document macOS remote control + bridge tunnels. (#960, fixes #865) — thanks @kkarimi.
+- Apps: use canonical main session keys from gateway defaults across macOS/iOS/Android to avoid creating bare `main` sessions.
+- macOS: fix cron preview/testing payload to use `channel` key. (#867) — thanks @wes-davis.
+- Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
+- Telegram: split long captions into media + follow-up text messages. (#907) - thanks @jalehman.
+- Telegram: migrate group config when supergroups change chat IDs. (#906) — thanks @sleontenko.
+- Messaging: unify markdown formatting + format-first chunking for Slack/Telegram/Signal. (#920) — thanks @TheSethRose.
+- Slack: drop Socket Mode events with mismatched `api_app_id`/`team_id`. (#889) — thanks @roshanasingh4.
+- Discord: isolate autoThread thread context. (#856) — thanks @davidguttman.
+- WhatsApp: fix context isolation using wrong ID (was bot's number, now conversation ID). (#911) — thanks @tristanmanchester.
+- WhatsApp: normalize user JIDs with device suffix for allowlist checks in groups. (#838) — thanks @peschee.
 
 ## 2026.1.13
 
@@ -37,6 +159,7 @@
 - Memory: new `clawdbot memory` CLI plus `memory_search`/`memory_get` tools with snippets + line ranges; index stored under `~/.clawdbot/memory/{agentId}.sqlite` with watch-on-by-default.
 - Agents: strengthen memory recall guidance; make workspace bootstrap truncation configurable (default 20k) with warnings; add default sub-agent model config.
 - Tools/Sandbox: add tool profiles + group shorthands; support tool-policy groups in `tools.sandbox.tools`; drop legacy `memory` shorthand; allow Docker bind mounts via `docker.binds`. (#790) — thanks @akonyer.
+- Tools: add provider/model-specific tool policy overrides (`tools.byProvider`) to trim tool exposure per provider.
 - Tools: add browser `scrollintoview` action; allow Claude/Gemini tool param aliases; allow thinking `xhigh` for GPT-5.2/Codex with safe downgrades. (#793) — thanks @hsrvc; (#444) — thanks @grp06.
 - Gateway/CLI: add Tailscale binary discovery, custom bind mode, and probe auth retry; add `clawdbot dashboard` auto-open flow; default native slash commands to `"auto"` with per-provider overrides. (#740) — thanks @jeffersonwarrior.
 - Auth/Onboarding: add Chutes OAuth (PKCE + refresh + onboarding choice); normalize API key inputs; default TUI onboarding to `deliver: false`. (#726) — thanks @FrieSei; (#791) — thanks @roshanasingh4.
@@ -49,6 +172,7 @@
 
 ### Fixes
 - Doctor: warn on pnpm workspace mismatches, missing Control UI assets, and missing tsx binaries; offer UI rebuilds.
+- Tools: apply global tool allow/deny even when agent-specific tool policy is set.
 - Models/Providers: treat credential validation failures as auth errors to trigger fallback; normalize `${ENV_VAR}` apiKey values and auto-fill missing provider keys; preserve explicit GitHub Copilot provider config + agent-dir auth profiles. (#822) — thanks @sebslight; (#705) — thanks @TAGOOZ.
 - Auth: drop invalid auth profiles from ordering so environment keys can still be used for providers like MiniMax.
 - Gemini: normalize Gemini 3 ids to preview variants; strip Gemini CLI tool call/response ids; downgrade missing `thought_signature`; strip Claude `msg_*` thought_signature fields to avoid base64 decode errors. (#795) — thanks @thewilloftheshadow; (#783) — thanks @ananth-vardhan-cn; (#793) — thanks @hsrvc; (#805) — thanks @marcmarg.
@@ -314,7 +438,7 @@
 - Dependencies: Pi 0.40.0 bump (#543) — thanks @mcinteerj.
 - Build: Docker build cache layer (#605) — thanks @zknicker.
 
-- Auth: enable OAuth token refresh for Claude CLI credentials (`anthropic:claude-cli`) with bidirectional sync back to Claude Code storage (file on Linux/Windows, Keychain on macOS). This allows long-running agents to operate autonomously without manual re-authentication (#654 — thanks @radek-paclt).
+- Auth: enable OAuth token refresh for Claude Code CLI credentials (`anthropic:claude-cli`) with bidirectional sync back to Claude Code storage (file on Linux/Windows, Keychain on macOS). This allows long-running agents to operate autonomously without manual re-authentication (#654 — thanks @radek-paclt).
 
 ## 2026.1.8
 

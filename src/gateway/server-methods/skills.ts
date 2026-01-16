@@ -1,11 +1,9 @@
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import {
   ErrorCodes,
   errorShape,
@@ -30,12 +28,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = loadConfig();
-    const workspaceDir = resolveAgentWorkspaceDir(
-      cfg,
-      resolveDefaultAgentId(cfg),
-    );
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       config: cfg,
+      eligibility: { remote: getRemoteSkillEligibility() },
     });
     respond(true, report, undefined);
   },
@@ -57,10 +53,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
     };
     const cfg = loadConfig();
-    const workspaceDirRaw = resolveAgentWorkspaceDir(
-      cfg,
-      resolveDefaultAgentId(cfg),
-    );
+    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
@@ -71,9 +64,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     respond(
       result.ok,
       result,
-      result.ok
-        ? undefined
-        : errorShape(ErrorCodes.UNAVAILABLE, result.message),
+      result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.message),
     );
   },
   "skills.update": async ({ params, respond }) => {
@@ -124,10 +115,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       skills,
     };
     await writeConfigFile(nextConfig);
-    respond(
-      true,
-      { ok: true, skillKey: p.skillKey, config: current },
-      undefined,
-    );
+    respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
   },
 };

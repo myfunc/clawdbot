@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   GroupChatSchema,
+  InboundDebounceSchema,
   NativeCommandsSettingSchema,
   QueueSchema,
 } from "./zod-schema.core.js";
@@ -9,6 +10,11 @@ import {
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
+    dmScope: z.union([
+      z.literal("main"),
+      z.literal("per-peer"),
+      z.literal("per-channel-peer"),
+    ]).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),
@@ -34,11 +40,7 @@ export const SessionSchema = z
                 .object({
                   channel: z.string().optional(),
                   chatType: z
-                    .union([
-                      z.literal("direct"),
-                      z.literal("group"),
-                      z.literal("room"),
-                    ])
+                    .union([z.literal("direct"), z.literal("group"), z.literal("room")])
                     .optional(),
                   keyPrefix: z.string().optional(),
                 })
@@ -62,10 +64,9 @@ export const MessagesSchema = z
     responsePrefix: z.string().optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
+    inbound: InboundDebounceSchema,
     ackReaction: z.string().optional(),
-    ackReactionScope: z
-      .enum(["group-mentions", "group-all", "direct", "all"])
-      .optional(),
+    ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
   })
   .optional();

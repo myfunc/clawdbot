@@ -10,6 +10,13 @@ export type SessionChannelId = ChannelId | "webchat";
 export type SessionChatType = "direct" | "group" | "room";
 
 export type SessionEntry = {
+  /**
+   * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
+   * Stored on the main session entry.
+   */
+  lastHeartbeatText?: string;
+  /** Timestamp (ms) when lastHeartbeatText was delivered. */
+  lastHeartbeatSentAt?: number;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -26,6 +33,8 @@ export type SessionEntry = {
   providerOverride?: string;
   modelOverride?: string;
   authProfileOverride?: string;
+  authProfileOverrideSource?: "auto" | "user";
+  authProfileOverrideCompactionCount?: number;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
@@ -61,19 +70,15 @@ export type SessionEntry = {
   lastTo?: string;
   lastAccountId?: string;
   skillsSnapshot?: SessionSkillSnapshot;
+  systemPromptReport?: SessionSystemPromptReport;
 };
 
 export function mergeSessionEntry(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
 ): SessionEntry {
-  const sessionId =
-    patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = Math.max(
-    existing?.updatedAt ?? 0,
-    patch.updatedAt ?? 0,
-    Date.now(),
-  );
+  const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
+  const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
   if (!existing) return { ...patch, sessionId, updatedAt };
   return { ...existing, ...patch, sessionId, updatedAt };
 }
@@ -90,6 +95,49 @@ export type SessionSkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string }>;
   resolvedSkills?: Skill[];
+  version?: number;
+};
+
+export type SessionSystemPromptReport = {
+  source: "run" | "estimate";
+  generatedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
+  provider?: string;
+  model?: string;
+  workspaceDir?: string;
+  bootstrapMaxChars?: number;
+  sandbox?: {
+    mode?: string;
+    sandboxed?: boolean;
+  };
+  systemPrompt: {
+    chars: number;
+    projectContextChars: number;
+    nonProjectContextChars: number;
+  };
+  injectedWorkspaceFiles: Array<{
+    name: string;
+    path: string;
+    missing: boolean;
+    rawChars: number;
+    injectedChars: number;
+    truncated: boolean;
+  }>;
+  skills: {
+    promptChars: number;
+    entries: Array<{ name: string; blockChars: number }>;
+  };
+  tools: {
+    listChars: number;
+    schemaChars: number;
+    entries: Array<{
+      name: string;
+      summaryChars: number;
+      schemaChars: number;
+      propertiesCount?: number | null;
+    }>;
+  };
 };
 
 export const DEFAULT_RESET_TRIGGER = "/new";

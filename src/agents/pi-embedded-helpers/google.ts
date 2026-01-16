@@ -4,10 +4,13 @@ import { sanitizeGoogleTurnOrdering } from "./bootstrap.js";
 
 export function isGoogleModelApi(api?: string | null): boolean {
   return (
-    api === "google-gemini-cli" ||
-    api === "google-generative-ai" ||
-    api === "google-antigravity"
+    api === "google-gemini-cli" || api === "google-generative-ai" || api === "google-antigravity"
   );
+}
+
+export function isAntigravityClaude(api?: string | null, modelId?: string): boolean {
+  if (api !== "google-antigravity") return false;
+  return modelId?.toLowerCase().includes("claude") ?? false;
 }
 
 export { sanitizeGoogleTurnOrdering };
@@ -28,9 +31,60 @@ type GeminiToolCallBlock = {
   input?: unknown;
 };
 
-export function downgradeGeminiHistory(
-  messages: AgentMessage[],
-): AgentMessage[] {
+type GeminiThinkingBlock = {
+  type?: unknown;
+  thinking?: unknown;
+  thinkingSignature?: unknown;
+};
+
+export function downgradeGeminiThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    // Gemini rejects thinking blocks that lack a signature; downgrade to text for safety.
+    let hasDowngraded = false;
+    type AssistantContentBlock = (typeof assistantMsg.content)[number];
+    const nextContent = assistantMsg.content.flatMap((block): AssistantContentBlock[] => {
+      if (!block || typeof block !== "object") return [block as AssistantContentBlock];
+      const record = block as GeminiThinkingBlock;
+      if (record.type !== "thinking") return [block];
+      const thinkingSig =
+        typeof record.thinkingSignature === "string" ? record.thinkingSignature.trim() : "";
+      if (thinkingSig.length > 0) return [block];
+      const thinking = typeof record.thinking === "string" ? record.thinking : "";
+      const trimmed = thinking.trim();
+      hasDowngraded = true;
+      if (!trimmed) return [];
+      return [{ type: "text" as const, text: thinking }];
+    });
+
+    if (!hasDowngraded) {
+      out.push(msg);
+      continue;
+    }
+    if (nextContent.length === 0) {
+      continue;
+    }
+    out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+  }
+  return out;
+}
+
+export function downgradeGeminiHistory(messages: AgentMessage[]): AgentMessage[] {
   const downgradedIds = new Set<string>();
   const out: AgentMessage[] = [];
 
@@ -63,11 +117,7 @@ export function downgradeGeminiHistory(
         if (!block || typeof block !== "object") return block;
         const blockRecord = block as GeminiToolCallBlock;
         const type = blockRecord.type;
-        if (
-          type === "toolCall" ||
-          type === "functionCall" ||
-          type === "toolUse"
-        ) {
+        if (type === "toolCall" || type === "functionCall" || type === "toolUse") {
           const hasSignature = Boolean(blockRecord.thought_signature);
           if (!hasSignature) {
             const id =
@@ -83,15 +133,12 @@ export function downgradeGeminiHistory(
                   ? blockRecord.toolName
                   : undefined;
             const args =
-              blockRecord.arguments !== undefined
-                ? blockRecord.arguments
-                : blockRecord.input;
+              blockRecord.arguments !== undefined ? blockRecord.arguments : blockRecord.input;
 
             if (id) downgradedIds.add(id);
             hasDowngraded = true;
 
-            const argsText =
-              typeof args === "string" ? args : JSON.stringify(args, null, 2);
+            const argsText = typeof args === "string" ? args : JSON.stringify(args, null, 2);
 
             return {
               type: "text",
@@ -104,11 +151,7 @@ export function downgradeGeminiHistory(
         return block;
       });
 
-      out.push(
-        hasDowngraded
-          ? ({ ...assistantMsg, content: newContent } as AgentMessage)
-          : msg,
-      );
+      out.push(hasDowngraded ? ({ ...assistantMsg, content: newContent } as AgentMessage) : msg);
       continue;
     }
 

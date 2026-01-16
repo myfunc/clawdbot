@@ -41,17 +41,14 @@ export const AgentDefaultsSchema = z
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     userTimezone: z.string().optional(),
+    timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
     contextPruning: z
       .object({
         mode: z
-          .union([
-            z.literal("off"),
-            z.literal("adaptive"),
-            z.literal("aggressive"),
-          ])
+          .union([z.literal("off"), z.literal("adaptive"), z.literal("aggressive")])
           .optional(),
         keepLastAssistants: z.number().int().nonnegative().optional(),
         softTrimRatio: z.number().min(0).max(1).optional(),
@@ -80,9 +77,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     compaction: z
       .object({
-        mode: z
-          .union([z.literal("default"), z.literal("safeguard")])
-          .optional(),
+        mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         memoryFlush: z
           .object({
@@ -106,12 +101,8 @@ export const AgentDefaultsSchema = z
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
     elevatedDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
-    blockStreamingDefault: z
-      .union([z.literal("off"), z.literal("on")])
-      .optional(),
-    blockStreamingBreak: z
-      .union([z.literal("text_end"), z.literal("message_end")])
-      .optional(),
+    blockStreamingDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
+    blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),
     blockStreamingChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
@@ -145,22 +136,10 @@ export const AgentDefaultsSchema = z
       .optional(),
     sandbox: z
       .object({
-        mode: z
-          .union([z.literal("off"), z.literal("non-main"), z.literal("all")])
-          .optional(),
-        workspaceAccess: z
-          .union([z.literal("none"), z.literal("ro"), z.literal("rw")])
-          .optional(),
-        sessionToolsVisibility: z
-          .union([z.literal("spawned"), z.literal("all")])
-          .optional(),
-        scope: z
-          .union([
-            z.literal("session"),
-            z.literal("agent"),
-            z.literal("shared"),
-          ])
-          .optional(),
+        mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+        workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
+        sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
+        scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
         perSession: z.boolean().optional(),
         workspaceRoot: z.string().optional(),
         docker: SandboxDockerSchema,

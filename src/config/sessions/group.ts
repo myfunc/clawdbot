@@ -1,8 +1,8 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { CHANNEL_IDS } from "../../channels/registry.js";
+import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
 
-const GROUP_SURFACES = new Set<string>([...CHANNEL_IDS, "webchat"]);
+const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
 function normalizeGroupLabel(raw?: string) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
@@ -44,20 +44,13 @@ export function buildGroupDisplayName(params: {
   if (!params.room && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
   }
-  if (
-    token &&
-    !/^[@#]/.test(token) &&
-    !token.startsWith("g-") &&
-    !token.includes("#")
-  ) {
+  if (token && !/^[@#]/.test(token) && !token.startsWith("g-") && !token.includes("#")) {
     token = `g-${token}`;
   }
   return token ? `${providerKey}:${token}` : providerKey;
 }
 
-export function resolveGroupSessionKey(
-  ctx: MsgContext,
-): GroupKeyResolution | null {
+export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
   if (!from) return null;
   const chatType = ctx.ChatType?.trim().toLowerCase();
@@ -71,9 +64,7 @@ export function resolveGroupSessionKey(
 
   const providerHint = ctx.Provider?.trim().toLowerCase();
   const hasLegacyGroupPrefix = from.startsWith("group:");
-  const raw = (
-    hasLegacyGroupPrefix ? from.slice("group:".length) : from
-  ).trim();
+  const raw = (hasLegacyGroupPrefix ? from.slice("group:".length) : from).trim();
 
   let provider: string | undefined;
   let kind: "group" | "channel" | undefined;
@@ -85,7 +76,7 @@ export function resolveGroupSessionKey(
   };
 
   const parseParts = (parts: string[]) => {
-    if (parts.length >= 2 && GROUP_SURFACES.has(parts[0])) {
+    if (parts.length >= 2 && getGroupSurfaces().has(parts[0])) {
       provider = parts[0];
       if (parts.length >= 3) {
         const kindCandidate = parts[1];

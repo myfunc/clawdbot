@@ -13,6 +13,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
 export const TOOL_GROUPS: Record<string, string[]> = {
   // NOTE: Keep canonical (lowercase) tool names here.
   "group:memory": ["memory_search", "memory_get"],
+  "group:web": ["web_search", "web_fetch"],
   // Basic workspace/file tools
   "group:fs": ["read", "write", "edit", "apply_patch"],
   // Host/runtime execution tools
@@ -49,6 +50,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "session_status",
     "memory_search",
     "memory_get",
+    "web_search",
+    "web_fetch",
     "image",
   ],
 };
@@ -58,13 +61,7 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: ["session_status"],
   },
   coding: {
-    allow: [
-      "group:fs",
-      "group:runtime",
-      "group:sessions",
-      "group:memory",
-      "image",
-    ],
+    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
   },
   messaging: {
     allow: [
@@ -102,9 +99,7 @@ export function expandToolGroups(list?: string[]) {
   return Array.from(new Set(expanded));
 }
 
-export function resolveToolProfilePolicy(
-  profile?: string,
-): ToolProfilePolicy | undefined {
+export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) return undefined;
   const resolved = TOOL_PROFILES[profile as ToolProfileId];
   if (!resolved) return undefined;

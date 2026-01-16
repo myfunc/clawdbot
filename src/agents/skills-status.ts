@@ -12,6 +12,7 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
   type SkillEntry,
+  type SkillEligibilityContext,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
@@ -135,6 +136,7 @@ function buildSkillStatus(
   entry: SkillEntry,
   config?: ClawdbotConfig,
   prefs?: SkillsInstallPreferences,
+  eligibility?: SkillEligibilityContext,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
@@ -156,13 +158,23 @@ function buildSkillStatus(
   const requiredConfig = entry.clawdbot?.requires?.config ?? [];
   const requiredOs = entry.clawdbot?.os ?? [];
 
-  const missingBins = requiredBins.filter((bin) => !hasBinary(bin));
+  const missingBins = requiredBins.filter((bin) => {
+    if (hasBinary(bin)) return false;
+    if (eligibility?.remote?.hasBin?.(bin)) return false;
+    return true;
+  });
   const missingAnyBins =
-    requiredAnyBins.length > 0 && !requiredAnyBins.some((bin) => hasBinary(bin))
+    requiredAnyBins.length > 0 &&
+    !(
+      requiredAnyBins.some((bin) => hasBinary(bin)) ||
+      eligibility?.remote?.hasAnyBin?.(requiredAnyBins)
+    )
       ? requiredAnyBins
       : [];
   const missingOs =
-    requiredOs.length > 0 && !requiredOs.includes(process.platform)
+    requiredOs.length > 0 &&
+    !requiredOs.includes(process.platform) &&
+    !eligibility?.remote?.platforms?.some((platform) => requiredOs.includes(platform))
       ? requiredOs
       : [];
 
@@ -176,16 +188,12 @@ function buildSkillStatus(
     missingEnv.push(envName);
   }
 
-  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map(
-    (pathStr) => {
-      const value = resolveConfigPath(config, pathStr);
-      const satisfied = isConfigPathTruthy(config, pathStr);
-      return { path: pathStr, value, satisfied };
-    },
-  );
-  const missingConfig = configChecks
-    .filter((check) => !check.satisfied)
-    .map((check) => check.path);
+  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map((pathStr) => {
+    const value = resolveConfigPath(config, pathStr);
+    const satisfied = isConfigPathTruthy(config, pathStr);
+    return { path: pathStr, value, satisfied };
+  });
+  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
 
   const missing = always
     ? { bins: [], anyBins: [], env: [], config: [], os: [] }
@@ -229,10 +237,7 @@ function buildSkillStatus(
     },
     missing,
     configChecks,
-    install: normalizeInstallOptions(
-      entry,
-      prefs ?? resolveSkillsInstallPreferences(config),
-    ),
+    install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
   };
 }
 
@@ -242,18 +247,17 @@ export function buildWorkspaceSkillStatus(
     config?: ClawdbotConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
+    eligibility?: SkillEligibilityContext;
   },
 ): SkillStatusReport {
-  const managedSkillsDir =
-    opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const skillEntries =
-    opts?.entries ?? loadWorkspaceSkillEntries(workspaceDir, opts);
+  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const skillEntries = opts?.entries ?? loadWorkspaceSkillEntries(workspaceDir, opts);
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs),
+      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility),
     ),
   };
 }

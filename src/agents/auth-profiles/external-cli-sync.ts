@@ -16,10 +16,7 @@ import type {
   TokenCredential,
 } from "./types.js";
 
-function shallowEqualOAuthCredentials(
-  a: OAuthCredential | undefined,
-  b: OAuthCredential,
-): boolean {
+function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCredential): boolean {
   if (!a) return false;
   if (a.type !== "oauth") return false;
   return (
@@ -34,10 +31,7 @@ function shallowEqualOAuthCredentials(
   );
 }
 
-function shallowEqualTokenCredentials(
-  a: TokenCredential | undefined,
-  b: TokenCredential,
-): boolean {
+function shallowEqualTokenCredentials(a: TokenCredential | undefined, b: TokenCredential): boolean {
   if (!a) return false;
   if (a.type !== "token") return false;
   return (
@@ -48,10 +42,7 @@ function shallowEqualTokenCredentials(
   );
 }
 
-function isExternalProfileFresh(
-  cred: AuthProfileCredential | undefined,
-  now: number,
-): boolean {
+function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
   if (!cred) return false;
   if (cred.type !== "oauth" && cred.type !== "token") return false;
   if (cred.provider !== "anthropic" && cred.provider !== "openai-codex") {
@@ -62,7 +53,7 @@ function isExternalProfileFresh(
 }
 
 /**
- * Sync OAuth credentials from external CLI tools (Claude CLI, Codex CLI) into the store.
+ * Sync OAuth credentials from external CLI tools (Claude Code CLI, Codex CLI) into the store.
  * This allows clawdbot to use the same credentials as these tools without requiring
  * separate authentication, and keeps credentials in sync when CLI tools refresh tokens.
  *
@@ -75,7 +66,7 @@ export function syncExternalCliCredentials(
   let mutated = false;
   const now = Date.now();
 
-  // Sync from Claude CLI (supports both OAuth and Token credentials)
+  // Sync from Claude Code CLI (supports both OAuth and Token credentials)
   const existingClaude = store.profiles[CLAUDE_CLI_PROFILE_ID];
   const shouldSyncClaude =
     !existingClaude ||
@@ -104,8 +95,7 @@ export function syncExternalCliCredentials(
         !existingOAuth ||
         existingOAuth.provider !== "anthropic" ||
         existingOAuth.expires <= now ||
-        (claudeCredsExpires > now &&
-          claudeCredsExpires > existingOAuth.expires);
+        (claudeCredsExpires > now && claudeCredsExpires > existingOAuth.expires);
     } else {
       const existingToken = existing?.type === "token" ? existing : undefined;
       isEqual = shallowEqualTokenCredentials(existingToken, claudeCreds);
@@ -114,8 +104,7 @@ export function syncExternalCliCredentials(
         !existingToken ||
         existingToken.provider !== "anthropic" ||
         (existingToken.expires ?? 0) <= now ||
-        (claudeCredsExpires > now &&
-          claudeCredsExpires > (existingToken.expires ?? 0));
+        (claudeCredsExpires > now && claudeCredsExpires > (existingToken.expires ?? 0));
     }
 
     // Also update if credential type changed (token -> oauth upgrade)
@@ -166,10 +155,7 @@ export function syncExternalCliCredentials(
       existingOAuth.expires <= now ||
       codexCreds.expires > existingOAuth.expires;
 
-    if (
-      shouldUpdate &&
-      !shallowEqualOAuthCredentials(existingOAuth, codexCreds)
-    ) {
+    if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, codexCreds)) {
       store.profiles[CODEX_CLI_PROFILE_ID] = codexCreds;
       mutated = true;
       log.info("synced openai-codex credentials from codex cli", {

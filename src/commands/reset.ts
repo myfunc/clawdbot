@@ -9,11 +9,7 @@ import {
 } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-  stylePromptTitle,
-} from "../terminal/prompt-style.js";
+import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import {
   collectWorkspaceDirs,
   isPathWithin,
@@ -35,26 +31,23 @@ const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined
-        ? opt
-        : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 
 async function stopGatewayIfRunning(runtime: RuntimeEnv) {
   if (isNixMode) return;
   const service = resolveGatewayService();
-  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env, profile });
+    loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
     runtime.error(`Gateway service check failed: ${String(err)}`);
     return;
   }
   if (!loaded) return;
   try {
-    await service.stop({ env: process.env, profile, stdout: process.stdout });
+    await service.stop({ env: process.env, stdout: process.stdout });
   } catch (err) {
     runtime.error(`Gateway stop failed: ${String(err)}`);
   }
@@ -105,9 +98,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (!["config", "config+creds+sessions", "full"].includes(scope)) {
-    runtime.error(
-      'Invalid --scope. Expected "config", "config+creds+sessions", or "full".',
-    );
+    runtime.error('Invalid --scope. Expected "config", "config+creds+sessions", or "full".');
     runtime.exit(1);
     return;
   }

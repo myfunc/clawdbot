@@ -2,13 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import {
-  CURRENT_SESSION_VERSION,
-  SessionManager,
-} from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   buildGroupDisplayName,
@@ -23,7 +20,7 @@ import {
   resolveStorePath,
   type SessionEntry,
   type SessionScope,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -59,18 +56,14 @@ function forkSessionFromParent(params: {
     const manager = SessionManager.open(parentSessionFile);
     const leafId = manager.getLeafId();
     if (leafId) {
-      const sessionFile =
-        manager.createBranchedSession(leafId) ?? manager.getSessionFile();
+      const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
       if (sessionFile && sessionId) return { sessionId, sessionFile };
     }
     const sessionId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
     const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const sessionFile = path.join(
-      manager.getSessionDir(),
-      `${fileTimestamp}_${sessionId}.jsonl`,
-    );
+    const sessionFile = path.join(manager.getSessionDir(), `${fileTimestamp}_${sessionId}.jsonl`);
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
@@ -95,9 +88,7 @@ export async function initSessionState(params: {
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
-    ctx.CommandSource === "native"
-      ? ctx.CommandTargetSessionKey?.trim()
-      : undefined;
+    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
@@ -111,15 +102,11 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
-  const idleMinutes = Math.max(
-    sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
-    1,
-  );
+  const idleMinutes = Math.max(sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES, 1);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
-  const sessionStore: Record<string, SessionEntry> =
-    loadSessionStore(storePath);
+  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath);
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -135,16 +122,12 @@ export async function initSessionState(params: {
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
-  const groupResolution =
-    resolveGroupSessionKey(sessionCtxForState) ?? undefined;
-  const isGroup =
-    ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
+  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
+  const isGroup = ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
   const commandSource = ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
-  const triggerBodyNormalized = stripStructuralPrefixes(commandSource)
-    .trim()
-    .toLowerCase();
+  const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim().toLowerCase();
 
   // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
   const rawBody = commandSource;
@@ -169,10 +152,7 @@ export async function initSessionState(params: {
       break;
     }
     const triggerPrefix = `${trigger} `;
-    if (
-      trimmedBody.startsWith(triggerPrefix) ||
-      strippedForReset.startsWith(triggerPrefix)
-    ) {
+    if (trimmedBody.startsWith(triggerPrefix) || strippedForReset.startsWith(triggerPrefix)) {
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
       break;
@@ -208,6 +188,11 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  // Track the originating channel/to for announce routing (subagent announce-back).
+  const lastChannel =
+    (ctx.OriginatingChannel as string | undefined)?.trim() || baseEntry?.lastChannel;
+  const lastTo = ctx.OriginatingTo?.trim() || ctx.To?.trim() || baseEntry?.lastTo;
+  const lastAccountId = ctx.AccountId?.trim() || baseEntry?.lastAccountId;
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -232,6 +217,10 @@ export async function initSessionState(params: {
     subject: baseEntry?.subject,
     room: baseEntry?.room,
     space: baseEntry?.space,
+    // Track originating channel for subagent announce routing.
+    lastChannel,
+    lastTo,
+    lastAccountId,
   };
   if (groupResolution?.channel) {
     const channel = groupResolution.channel;
@@ -241,15 +230,10 @@ export async function initSessionState(params: {
     const normalizedChannel = normalizeChannelId(channel);
     const isRoomProvider = Boolean(
       normalizedChannel &&
-        getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes(
-          "channel",
-        ),
+      getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
     );
     const nextRoom =
-      explicitRoom ??
-      (isRoomProvider && subject && subject.startsWith("#")
-        ? subject
-        : undefined);
+      explicitRoom ?? (isRoomProvider && subject && subject.startsWith("#") ? subject : undefined);
     const nextSubject = nextRoom ? undefined : subject;
     sessionEntry.chatType = groupResolution.chatType ?? "group";
     sessionEntry.channel = channel;
@@ -295,7 +279,15 @@ export async function initSessionState(params: {
     );
   }
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await saveSessionStore(storePath, sessionStore);
+  await updateSessionStore(storePath, (store) => {
+    if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
+      if (store[groupResolution.legacyKey] && !store[sessionKey]) {
+        store[sessionKey] = store[groupResolution.legacyKey];
+      }
+      delete store[groupResolution.legacyKey];
+    }
+    store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+  });
 
   const sessionCtx: TemplateContext = {
     ...ctx,

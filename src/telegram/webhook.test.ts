@@ -3,10 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { startTelegramWebhook } from "./webhook.js";
 
 const handlerSpy = vi.fn(
-  (
-    _req: unknown,
-    res: { writeHead: (status: number) => void; end: (body?: string) => void },
-  ) => {
+  (_req: unknown, res: { writeHead: (status: number) => void; end: (body?: string) => void }) => {
     res.writeHead(200);
     res.end("ok");
   },
@@ -19,9 +16,10 @@ const createTelegramBotSpy = vi.fn(() => ({
   stop: stopSpy,
 }));
 
-vi.mock("grammy", () => ({
-  webhookCallback: () => handlerSpy,
-}));
+vi.mock("grammy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("grammy")>();
+  return { ...actual, webhookCallback: () => handlerSpy };
+});
 
 vi.mock("./bot.js", () => ({
   createTelegramBot: (...args: unknown[]) => createTelegramBotSpy(...args),

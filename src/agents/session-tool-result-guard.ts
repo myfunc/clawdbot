@@ -5,9 +5,42 @@ import { makeMissingToolResult } from "./session-transcript-repair.js";
 
 type ToolCall = { id: string; name?: string };
 
-function extractAssistantToolCalls(
-  msg: Extract<AgentMessage, { role: "assistant" }>,
-): ToolCall[] {
+const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+
+function stripFinalTagsFromText(text: string): string {
+  if (!text) return text;
+  return text.replace(FINAL_TAG_RE, "");
+}
+
+function stripFinalTagsFromAssistant(message: Extract<AgentMessage, { role: "assistant" }>) {
+  const content = message.content;
+  if (typeof content === "string") {
+    const cleaned = stripFinalTagsFromText(content);
+    return cleaned === content
+      ? message
+      : ({ ...message, content: cleaned } as unknown as AgentMessage);
+  }
+  if (!Array.isArray(content)) return message;
+
+  let changed = false;
+  const next = content.map((block) => {
+    if (!block || typeof block !== "object") return block;
+    const record = block as { type?: unknown; text?: unknown };
+    if (record.type === "text" && typeof record.text === "string") {
+      const cleaned = stripFinalTagsFromText(record.text);
+      if (cleaned !== record.text) {
+        changed = true;
+        return { ...record, text: cleaned };
+      }
+    }
+    return block;
+  });
+
+  if (!changed) return message;
+  return { ...message, content: next } as AgentMessage;
+}
+
+function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
   const content = msg.content;
   if (!Array.isArray(content)) return [];
 
@@ -16,11 +49,7 @@ function extractAssistantToolCalls(
     if (!block || typeof block !== "object") continue;
     const rec = block as { type?: unknown; id?: unknown; name?: unknown };
     if (typeof rec.id !== "string" || !rec.id) continue;
-    if (
-      rec.type === "toolCall" ||
-      rec.type === "toolUse" ||
-      rec.type === "functionCall"
-    ) {
+    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
       toolCalls.push({
         id: rec.id,
         name: typeof rec.name === "string" ? rec.name : undefined,
@@ -30,9 +59,7 @@ function extractAssistantToolCalls(
   return toolCalls;
 }
 
-function extractToolResultId(
-  msg: Extract<AgentMessage, { role: "toolResult" }>,
-): string | null {
+function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) return toolCallId;
   const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
@@ -59,18 +86,18 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
     const role = (message as { role?: unknown }).role;
 
     if (role === "toolResult") {
-      const id = extractToolResultId(
-        message as Extract<AgentMessage, { role: "toolResult" }>,
-      );
+      const id = extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
       if (id) pending.delete(id);
       return originalAppend(message as never);
     }
 
+    const sanitized =
+      role === "assistant"
+        ? stripFinalTagsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
+        : message;
     const toolCalls =
       role === "assistant"
-        ? extractAssistantToolCalls(
-            message as Extract<AgentMessage, { role: "assistant" }>,
-          )
+        ? extractAssistantToolCalls(sanitized as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
     // If previous tool calls are still pending, flush before non-tool results.
@@ -82,7 +109,7 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
       flushPendingToolResults();
     }
 
-    const result = originalAppend(message as never);
+    const result = originalAppend(sanitized as never);
 
     if (toolCalls.length > 0) {
       for (const call of toolCalls) {
@@ -94,8 +121,7 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
   };
 
   // Monkey-patch appendMessage with our guarded version.
-  sessionManager.appendMessage =
-    guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
 
   return {
     flushPendingToolResults,

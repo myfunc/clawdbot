@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import JSON5 from "json5";
-import {
-  getFileMtimeMs,
-  isCacheEnabled,
-  resolveCacheTtlMs,
-} from "../cache-utils.js";
+import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 // ============================================================================
@@ -49,17 +45,22 @@ export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
 }
 
+type LoadSessionStoreOptions = {
+  skipCache?: boolean;
+};
+
 export function loadSessionStore(
   storePath: string,
+  opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
   // Check cache first if enabled
-  if (isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const cached = SESSION_STORE_CACHE.get(storePath);
     if (cached && isSessionStoreCacheValid(cached)) {
       const currentMtimeMs = getFileMtimeMs(storePath);
       if (currentMtimeMs === cached.mtimeMs) {
-        // Return a shallow copy to prevent external mutations affecting cache
-        return { ...cached.store };
+        // Return a deep copy to prevent external mutations affecting cache
+        return structuredClone(cached.store);
       }
       invalidateSessionStoreCache(storePath);
     }
@@ -87,26 +88,23 @@ export function loadSessionStore(
       rec.channel = rec.provider;
       delete rec.provider;
     }
-    if (
-      typeof rec.lastChannel !== "string" &&
-      typeof rec.lastProvider === "string"
-    ) {
+    if (typeof rec.lastChannel !== "string" && typeof rec.lastProvider === "string") {
       rec.lastChannel = rec.lastProvider;
       delete rec.lastProvider;
     }
   }
 
   // Cache the result if caching is enabled
-  if (isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     SESSION_STORE_CACHE.set(storePath, {
-      store: { ...store }, // Store a copy to prevent external mutations
+      store: structuredClone(store), // Store a copy to prevent external mutations
       loadedAt: Date.now(),
       storePath,
       mtimeMs,
     });
   }
 
-  return store;
+  return structuredClone(store);
 }
 
 async function saveSessionStoreUnlocked(
@@ -174,6 +172,19 @@ export async function saveSessionStore(
 ): Promise<void> {
   await withSessionStoreLock(storePath, async () => {
     await saveSessionStoreUnlocked(storePath, store);
+  });
+}
+
+export async function updateSessionStore<T>(
+  storePath: string,
+  mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+): Promise<T> {
+  return await withSessionStoreLock(storePath, async () => {
+    // Always re-read inside the lock to avoid clobbering concurrent writers.
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const result = await mutator(store);
+    await saveSessionStoreUnlocked(storePath, store);
+    return result;
   });
 }
 
@@ -288,9 +299,7 @@ export async function updateLastRoute(params: {
       updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       lastChannel: channel,
       lastTo: to?.trim() ? to.trim() : undefined,
-      lastAccountId: accountId?.trim()
-        ? accountId.trim()
-        : existing?.lastAccountId,
+      lastAccountId: accountId?.trim() ? accountId.trim() : existing?.lastAccountId,
     });
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);

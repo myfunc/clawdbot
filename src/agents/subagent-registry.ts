@@ -1,7 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
@@ -20,9 +20,14 @@ export type SubagentRunRecord = {
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
+  outcome?: SubagentRunOutcome;
   archiveAtMs?: number;
+  /** @deprecated Use cleanupCompletedAt instead */
   announceCompletedAt?: number;
-  announceHandled: boolean;
+  /** @deprecated Use cleanupHandled instead */
+  announceHandled?: boolean;
+  cleanupCompletedAt?: number;
+  cleanupHandled?: boolean;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -45,11 +50,11 @@ function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) return;
   const entry = subagentRuns.get(runId);
   if (!entry) return;
-  if (entry.announceCompletedAt) return;
+  if (entry.cleanupCompletedAt) return;
 
   if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
-    if (!beginSubagentAnnounce(runId)) return;
-    const announce = runSubagentAnnounceFlow({
+    if (!beginSubagentCleanup(runId)) return;
+    void runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
@@ -62,9 +67,9 @@ function resumeSubagentRun(runId: string) {
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
       label: entry.label,
-    });
-    void announce.then((didAnnounce) => {
-      finalizeSubagentAnnounce(runId, entry.cleanup, didAnnounce);
+      outcome: entry.outcome,
+    }).then((didAnnounce) => {
+      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
     });
     resumedRuns.add(runId);
     return;
@@ -154,7 +159,9 @@ async function sweepSubagentRuns() {
 }
 
 function ensureListener() {
-  if (listenerStarted) return;
+  if (listenerStarted) {
+    return;
+  }
   listenerStarted = true;
   listenerStop = onAgentEvent((evt) => {
     if (!evt || evt.stream !== "lifecycle") return;
@@ -165,9 +172,7 @@ function ensureListener() {
     const phase = evt.data?.phase;
     if (phase === "start") {
       const startedAt =
-        typeof evt.data?.startedAt === "number"
-          ? (evt.data.startedAt as number)
-          : undefined;
+        typeof evt.data?.startedAt === "number" ? (evt.data.startedAt as number) : undefined;
       if (startedAt) {
         entry.startedAt = startedAt;
         persistSubagentRuns();
@@ -176,16 +181,20 @@ function ensureListener() {
     }
     if (phase !== "end" && phase !== "error") return;
     const endedAt =
-      typeof evt.data?.endedAt === "number"
-        ? (evt.data.endedAt as number)
-        : Date.now();
+      typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : Date.now();
     entry.endedAt = endedAt;
+    if (phase === "error") {
+      const error = typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      entry.outcome = { status: "error", error };
+    } else {
+      entry.outcome = { status: "ok" };
+    }
     persistSubagentRuns();
 
-    if (!beginSubagentAnnounce(evt.runId)) {
+    if (!beginSubagentCleanup(evt.runId)) {
       return;
     }
-    const announce = runSubagentAnnounceFlow({
+    void runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
@@ -198,18 +207,14 @@ function ensureListener() {
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
       label: entry.label,
-    });
-    void announce.then((didAnnounce) => {
-      finalizeSubagentAnnounce(evt.runId, entry.cleanup, didAnnounce);
+      outcome: entry.outcome,
+    }).then((didAnnounce) => {
+      finalizeSubagentCleanup(evt.runId, entry.cleanup, didAnnounce);
     });
   });
 }
 
-function finalizeSubagentAnnounce(
-  runId: string,
-  cleanup: "delete" | "keep",
-  didAnnounce: boolean,
-) {
+function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didAnnounce: boolean) {
   const entry = subagentRuns.get(runId);
   if (!entry) return;
   if (cleanup === "delete") {
@@ -217,17 +222,23 @@ function finalizeSubagentAnnounce(
     persistSubagentRuns();
     return;
   }
-  if (!didAnnounce) return;
-  entry.announceCompletedAt = Date.now();
+  if (!didAnnounce) {
+    // Allow retry on the next wake if the announce failed.
+    entry.cleanupHandled = false;
+    persistSubagentRuns();
+    return;
+  }
+  entry.cleanupCompletedAt = Date.now();
   persistSubagentRuns();
 }
 
-export function beginSubagentAnnounce(runId: string) {
+function beginSubagentCleanup(runId: string) {
   const entry = subagentRuns.get(runId);
   if (!entry) return false;
-  if (entry.announceCompletedAt) return false;
-  if (entry.announceHandled) return false;
-  entry.announceHandled = true;
+  // Support legacy field names for backward compatibility
+  if (entry.cleanupCompletedAt || entry.announceCompletedAt) return false;
+  if (entry.cleanupHandled || entry.announceHandled) return false;
+  entry.cleanupHandled = true;
   persistSubagentRuns();
   return true;
 }
@@ -247,10 +258,7 @@ export function registerSubagentRun(params: {
   const cfg = loadConfig();
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const archiveAtMs = archiveAfterMs ? now + archiveAfterMs : undefined;
-  const waitTimeoutMs = resolveSubagentWaitTimeoutMs(
-    cfg,
-    params.runTimeoutSeconds,
-  );
+  const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, params.runTimeoutSeconds);
   subagentRuns.set(params.runId, {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
@@ -263,7 +271,7 @@ export function registerSubagentRun(params: {
     createdAt: now,
     startedAt: now,
     archiveAtMs,
-    announceHandled: false,
+    cleanupHandled: false,
   });
   ensureListener();
   persistSubagentRuns();
@@ -283,7 +291,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
         timeoutMs,
       },
       timeoutMs: timeoutMs + 10_000,
-    })) as { status?: string; startedAt?: number; endedAt?: number };
+    })) as { status?: string; startedAt?: number; endedAt?: number; error?: string };
     if (wait?.status !== "ok" && wait?.status !== "error") return;
     const entry = subagentRuns.get(runId);
     if (!entry) return;
@@ -300,9 +308,12 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       entry.endedAt = Date.now();
       mutated = true;
     }
+    entry.outcome =
+      wait.status === "error" ? { status: "error", error: wait.error } : { status: "ok" };
+    mutated = true;
     if (mutated) persistSubagentRuns();
-    if (!beginSubagentAnnounce(runId)) return;
-    const announce = runSubagentAnnounceFlow({
+    if (!beginSubagentCleanup(runId)) return;
+    void runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
@@ -315,9 +326,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
       label: entry.label,
-    });
-    void announce.then((didAnnounce) => {
-      finalizeSubagentAnnounce(runId, entry.cleanup, didAnnounce);
+      outcome: entry.outcome,
+    }).then((didAnnounce) => {
+      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
     });
   } catch {
     // ignore

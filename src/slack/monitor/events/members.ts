@@ -7,20 +7,17 @@ import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMemberChannelEvent } from "../types.js";
 
-export function registerSlackMemberEvents(params: {
-  ctx: SlackMonitorContext;
-}) {
+export function registerSlackMemberEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
 
   ctx.app.event(
     "member_joined_channel",
-    async ({ event }: SlackEventMiddlewareArgs<"member_joined_channel">) => {
+    async ({ event, body }: SlackEventMiddlewareArgs<"member_joined_channel">) => {
       try {
+        if (ctx.shouldDropMismatchedSlackEvent(body)) return;
         const payload = event as SlackMemberChannelEvent;
         const channelId = payload.channel;
-        const channelInfo = channelId
-          ? await ctx.resolveChannelName(channelId)
-          : {};
+        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
         const channelType = payload.channel_type ?? channelInfo?.type;
         if (
           !ctx.isChannelAllowed({
@@ -31,9 +28,7 @@ export function registerSlackMemberEvents(params: {
         ) {
           return;
         }
-        const userInfo = payload.user
-          ? await ctx.resolveUserName(payload.user)
-          : {};
+        const userInfo = payload.user ? await ctx.resolveUserName(payload.user) : {};
         const userLabel = userInfo?.name ?? payload.user ?? "someone";
         const label = resolveSlackChannelLabel({
           channelId,
@@ -48,22 +43,19 @@ export function registerSlackMemberEvents(params: {
           contextKey: `slack:member:joined:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
         });
       } catch (err) {
-        ctx.runtime.error?.(
-          danger(`slack join handler failed: ${String(err)}`),
-        );
+        ctx.runtime.error?.(danger(`slack join handler failed: ${String(err)}`));
       }
     },
   );
 
   ctx.app.event(
     "member_left_channel",
-    async ({ event }: SlackEventMiddlewareArgs<"member_left_channel">) => {
+    async ({ event, body }: SlackEventMiddlewareArgs<"member_left_channel">) => {
       try {
+        if (ctx.shouldDropMismatchedSlackEvent(body)) return;
         const payload = event as SlackMemberChannelEvent;
         const channelId = payload.channel;
-        const channelInfo = channelId
-          ? await ctx.resolveChannelName(channelId)
-          : {};
+        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
         const channelType = payload.channel_type ?? channelInfo?.type;
         if (
           !ctx.isChannelAllowed({
@@ -74,9 +66,7 @@ export function registerSlackMemberEvents(params: {
         ) {
           return;
         }
-        const userInfo = payload.user
-          ? await ctx.resolveUserName(payload.user)
-          : {};
+        const userInfo = payload.user ? await ctx.resolveUserName(payload.user) : {};
         const userLabel = userInfo?.name ?? payload.user ?? "someone";
         const label = resolveSlackChannelLabel({
           channelId,
@@ -91,9 +81,7 @@ export function registerSlackMemberEvents(params: {
           contextKey: `slack:member:left:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
         });
       } catch (err) {
-        ctx.runtime.error?.(
-          danger(`slack leave handler failed: ${String(err)}`),
-        );
+        ctx.runtime.error?.(danger(`slack leave handler failed: ${String(err)}`));
       }
     },
   );

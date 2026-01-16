@@ -5,17 +5,24 @@ export type BlockReplyContext = {
   timeoutMs?: number;
 };
 
+/** Context passed to onModelSelected callback with actual model used. */
+export type ModelSelectedContext = {
+  provider: string;
+  model: string;
+  thinkLevel: string | undefined;
+};
+
 export type GetReplyOptions = {
   onReplyStart?: () => Promise<void> | void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
-  onBlockReply?: (
-    payload: ReplyPayload,
-    context?: BlockReplyContext,
-  ) => Promise<void> | void;
+  onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  /** Called when the actual model is selected (including after fallback).
+   * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
+  onModelSelected?: (ctx: ModelSelectedContext) => void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

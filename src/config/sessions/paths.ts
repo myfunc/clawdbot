@@ -1,9 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import {
-  DEFAULT_AGENT_ID,
-  normalizeAgentId,
-} from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
 import type { SessionEntry } from "./types.js";
 
@@ -39,12 +36,16 @@ export function resolveDefaultSessionStorePath(agentId?: string): string {
 export function resolveSessionTranscriptPath(
   sessionId: string,
   agentId?: string,
-  topicId?: number,
+  topicId?: string | number,
 ): string {
+  const safeTopicId =
+    typeof topicId === "string"
+      ? encodeURIComponent(topicId)
+      : typeof topicId === "number"
+        ? String(topicId)
+        : undefined;
   const fileName =
-    topicId !== undefined
-      ? `${sessionId}-topic-${topicId}.jsonl`
-      : `${sessionId}.jsonl`;
+    safeTopicId !== undefined ? `${sessionId}-topic-${safeTopicId}.jsonl` : `${sessionId}.jsonl`;
   return path.join(resolveAgentSessionsDir(agentId), fileName);
 }
 
@@ -54,9 +55,7 @@ export function resolveSessionFilePath(
   opts?: { agentId?: string },
 ): string {
   const candidate = entry?.sessionFile?.trim();
-  return candidate
-    ? candidate
-    : resolveSessionTranscriptPath(sessionId, opts?.agentId);
+  return candidate ? candidate : resolveSessionTranscriptPath(sessionId, opts?.agentId);
 }
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
@@ -69,7 +68,6 @@ export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
     }
     return path.resolve(expanded);
   }
-  if (store.startsWith("~"))
-    return path.resolve(store.replace(/^~(?=$|[\\/])/, os.homedir()));
+  if (store.startsWith("~")) return path.resolve(store.replace(/^~(?=$|[\\/])/, os.homedir()));
   return path.resolve(store);
 }

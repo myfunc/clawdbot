@@ -85,8 +85,7 @@ export function allowListMatches(
   if (candidate.id && list.ids.has(candidate.id)) return true;
   const slug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
   if (slug && list.names.has(slug)) return true;
-  if (candidate.tag && list.names.has(normalizeDiscordSlug(candidate.tag)))
-    return true;
+  if (candidate.tag && list.names.has(normalizeDiscordSlug(candidate.tag))) return true;
   return false;
 }
 
@@ -96,10 +95,7 @@ export function resolveDiscordUserAllowed(params: {
   userName?: string;
   userTag?: string;
 }) {
-  const allowList = normalizeDiscordAllowList(params.allowList, [
-    "discord:",
-    "user:",
-  ]);
+  const allowList = normalizeDiscordAllowList(params.allowList, ["discord:", "user:"]);
   if (!allowList) return true;
   return allowListMatches(allowList, {
     id: params.userId,
@@ -115,10 +111,7 @@ export function resolveDiscordCommandAuthorized(params: {
   author: User;
 }) {
   if (!params.isDirectMessage) return true;
-  const allowList = normalizeDiscordAllowList(params.allowFrom, [
-    "discord:",
-    "user:",
-  ]);
+  const allowList = normalizeDiscordAllowList(params.allowFrom, ["discord:", "user:"]);
   if (!allowList) return true;
   return allowListMatches(allowList, {
     id: params.author.id,
@@ -140,8 +133,7 @@ export function resolveDiscordGuildEntry(params: {
   const bySlug = entries[slug];
   if (bySlug) return { ...bySlug, id: guild.id, slug: slug || bySlug.slug };
   const wildcard = entries["*"];
-  if (wildcard)
-    return { ...wildcard, id: guild.id, slug: slug || wildcard.slug };
+  if (wildcard) return { ...wildcard, id: guild.id, slug: slug || wildcard.slug };
   return null;
 }
 
@@ -200,22 +192,20 @@ export function resolveDiscordShouldRequireMention(params: {
 }): boolean {
   if (!params.isGuildMessage) return false;
   if (params.isThread && params.channelConfig?.autoThread) return false;
-  return (
-    params.channelConfig?.requireMention ??
-    params.guildInfo?.requireMention ??
-    true
-  );
+  return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }
 
 export function isDiscordGroupAllowedByPolicy(params: {
   groupPolicy: "open" | "disabled" | "allowlist";
+  guildAllowlisted: boolean;
   channelAllowlistConfigured: boolean;
   channelAllowed: boolean;
 }): boolean {
-  const { groupPolicy, channelAllowlistConfigured, channelAllowed } = params;
+  const { groupPolicy, guildAllowlisted, channelAllowlistConfigured, channelAllowed } = params;
   if (groupPolicy === "disabled") return false;
   if (groupPolicy === "open") return true;
-  if (!channelAllowlistConfigured) return false;
+  if (!guildAllowlisted) return false;
+  if (!channelAllowlistConfigured) return true;
   return channelAllowed;
 }
 
@@ -227,18 +217,13 @@ export function resolveGroupDmAllow(params: {
 }) {
   const { channels, channelId, channelName, channelSlug } = params;
   if (!channels || channels.length === 0) return true;
-  const allowList = channels.map((entry) =>
-    normalizeDiscordSlug(String(entry)),
-  );
+  const allowList = channels.map((entry) => normalizeDiscordSlug(String(entry)));
   const candidates = [
     normalizeDiscordSlug(channelId),
     channelSlug,
     channelName ? normalizeDiscordSlug(channelName) : "",
   ].filter(Boolean);
-  return (
-    allowList.includes("*") ||
-    candidates.some((candidate) => allowList.includes(candidate))
-  );
+  return allowList.includes("*") || candidates.some((candidate) => allowList.includes(candidate));
 }
 
 export function shouldEmitDiscordReactionNotification(params: {
@@ -257,10 +242,7 @@ export function shouldEmitDiscordReactionNotification(params: {
     return Boolean(params.botId && params.messageAuthorId === params.botId);
   }
   if (mode === "allowlist") {
-    const list = normalizeDiscordAllowList(params.allowlist, [
-      "discord:",
-      "user:",
-    ]);
+    const list = normalizeDiscordAllowList(params.allowlist, ["discord:", "user:"]);
     if (!list) return false;
     return allowListMatches(list, {
       id: params.userId,

@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import {
   listPairingChannels,
   notifyPairingApproved,
-  resolvePairingChannel,
 } from "../channels/plugins/pairing.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
@@ -11,11 +11,35 @@ import {
   listChannelPairingRequests,
   type PairingChannel,
 } from "../pairing/pairing-store.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 const CHANNELS: PairingChannel[] = listPairingChannels();
 
+/** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown): PairingChannel {
-  return resolvePairingChannel(raw);
+  const value = (
+    typeof raw === "string"
+      ? raw
+      : typeof raw === "number" || typeof raw === "boolean"
+        ? String(raw)
+        : ""
+  )
+    .trim()
+    .toLowerCase();
+  if (!value) throw new Error("Channel required");
+
+  const normalized = normalizeChannelId(value);
+  if (normalized) {
+    if (!CHANNELS.includes(normalized as PairingChannel)) {
+      throw new Error(`Channel ${normalized} does not support pairing`);
+    }
+    return normalized as PairingChannel;
+  }
+
+  // Allow extension channels: validate format but don't require registry
+  if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) return value as PairingChannel;
+  throw new Error(`Invalid channel: ${value}`);
 }
 
 async function notifyApproved(channel: PairingChannel, id: string) {
@@ -26,7 +50,12 @@ async function notifyApproved(channel: PairingChannel, id: string) {
 export function registerPairingCli(program: Command) {
   const pairing = program
     .command("pairing")
-    .description("Secure DM pairing (approve inbound requests)");
+    .description("Secure DM pairing (approve inbound requests)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/pairing", "docs.clawd.bot/cli/pairing")}\n`,
+    );
 
   pairing
     .command("list")
@@ -54,9 +83,7 @@ export function registerPairingCli(program: Command) {
       for (const r of requests) {
         const meta = r.meta ? JSON.stringify(r.meta) : "";
         const idLabel = resolvePairingIdLabel(channel);
-        console.log(
-          `${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`,
-        );
+        console.log(`${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`);
       }
     });
 
@@ -86,9 +113,7 @@ export function registerPairingCli(program: Command) {
         code: String(resolvedCode),
       });
       if (!approved) {
-        throw new Error(
-          `No pending pairing request found for code: ${String(resolvedCode)}`,
-        );
+        throw new Error(`No pending pairing request found for code: ${String(resolvedCode)}`);
       }
 
       console.log(`Approved ${channel} sender ${approved.id}.`);

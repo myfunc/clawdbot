@@ -61,6 +61,16 @@ Note: Discord does not provide a simple username → id lookup without extra gui
 Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
 Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-ready replies easy.
 
+## Config writes
+By default, Discord is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { discord: { configWrites: false } }
+}
+```
+
 ## How to create your own bot
 
 This is the “Discord Developer Portal” setup for running Clawdbot in a server (guild) channel like `#help`.
@@ -181,7 +191,7 @@ Notes:
   - Your config requires mentions and you didn’t mention it, or
   - Your guild/channel allowlist denies the channel/user.
 - **`requireMention: false` but still no replies**:
-  - `channels.discord.groupPolicy` defaults to **allowlist**; set it to `"open"` or explicitly list channels under `channels.discord.guilds.<id>.channels`.
+  - `channels.discord.groupPolicy` defaults to **allowlist**; set it to `"open"` or add a guild entry under `channels.discord.guilds` (optionally list channels under `channels.discord.guilds.<id>.channels` to restrict).
   - `requireMention` must live under `channels.discord.guilds` (or a specific channel). `channels.discord.requireMention` at the top level is ignored.
 - **Permission audits** (`channels status --probe`) only check numeric channel IDs. If you use slugs/names as `channels.discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `channels.discord.dm.enabled=false`, `channels.discord.dm.policy="disabled"`, or you haven’t been approved yet (`channels.discord.dm.policy="pairing"`).
@@ -290,6 +300,7 @@ ack reaction after the bot replies.
 - `maxLinesPerMessage`: soft max line count per message. Default: 17.
 - `mediaMaxMb`: clamp inbound media saved to disk.
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20; falls back to `messages.groupChat.historyLimit`; `0` disables).
+- `dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `dms["<user_id>"].historyLimit`.
 - `retry`: retry policy for outbound Discord API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `actions`: per-action tool gates; omit to allow all (set `false` to disable).
   - `reactions` (covers react + read reactions)
@@ -341,6 +352,7 @@ Allowlist matching notes:
 - Prefixes like `discord:`/`user:` (users) and `channel:` (group DMs) are supported.
 - Use `*` to allow any sender/channel.
 - When `guilds.<id>.channels` is present, channels not listed are denied by default.
+- When `guilds.<id>.channels` is omitted, all channels in the allowlisted guild are allowed.
 
 Native command notes:
 - The registered commands mirror Clawdbot’s chat commands.
@@ -351,6 +363,7 @@ The agent can call `discord` with actions like:
 - `react` / `reactions` (add or list reactions)
 - `sticker`, `poll`, `permissions`
 - `readMessages`, `sendMessage`, `editMessage`, `deleteMessage`
+- Read/search/pin tool payloads include normalized `timestampMs` (UTC epoch ms) and `timestampUtc` alongside raw Discord `timestamp`.
 - `threadCreate`, `threadList`, `threadReply`
 - `pinMessage`, `unpinMessage`, `listPins`
 - `searchMessages`, `memberInfo`, `roleInfo`, `roleAdd`, `roleRemove`, `emojiList`

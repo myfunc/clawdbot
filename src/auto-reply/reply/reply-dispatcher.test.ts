@@ -10,9 +10,8 @@ describe("createReplyDispatcher", () => {
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
-    expect(
-      dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` }),
-    ).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(false);
 
     await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();
@@ -28,9 +27,7 @@ describe("createReplyDispatcher", () => {
     });
 
     expect(dispatcher.sendFinalReply({ text: HEARTBEAT_TOKEN })).toBe(false);
-    expect(
-      dispatcher.sendToolResult({ text: `${HEARTBEAT_TOKEN} hello` }),
-    ).toBe(true);
+    expect(dispatcher.sendToolResult({ text: `${HEARTBEAT_TOKEN} hello` })).toBe(true);
     await dispatcher.waitForIdle();
 
     expect(deliver).toHaveBeenCalledTimes(1);
@@ -91,9 +88,7 @@ describe("createReplyDispatcher", () => {
   });
 
   it("fires onIdle when the queue drains", async () => {
-    const deliver = vi.fn(
-      async () => await new Promise((resolve) => setTimeout(resolve, 5)),
-    );
+    const deliver = vi.fn(async () => await new Promise((resolve) => setTimeout(resolve, 5)));
     const onIdle = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onIdle });
 

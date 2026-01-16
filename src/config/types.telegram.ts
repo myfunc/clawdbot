@@ -11,6 +11,7 @@ import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
+  deleteMessage?: boolean;
 };
 
 export type TelegramAccountConfig = {
@@ -20,6 +21,8 @@ export type TelegramAccountConfig = {
   capabilities?: string[];
   /** Override native command registration for Telegram (bool or "auto"). */
   commands?: ProviderCommandsConfig;
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /**
    * Controls how Telegram direct chats (DMs) are handled:
    * - "pairing" (default): unknown senders get a pairing code; owner must approve
@@ -63,6 +66,8 @@ export type TelegramAccountConfig = {
   /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
+  timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
   proxy?: string;
@@ -71,6 +76,21 @@ export type TelegramAccountConfig = {
   webhookPath?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /**
+   * Controls which user reactions trigger notifications:
+   * - "off" (default): ignore all reactions
+   * - "own": notify when users react to bot messages
+   * - "all": notify agent of all reactions
+   */
+  reactionNotifications?: "off" | "own" | "all";
+  /**
+   * Controls agent's reaction capability:
+   * - "off": agent cannot react
+   * - "ack" (default): bot sends acknowledgment reactions (👀 while processing)
+   * - "minimal": agent can react sparingly (guideline: 1 per 5-10 exchanges)
+   * - "extensive": agent can react liberally when appropriate
+   */
+  reactionLevel?: "off" | "ack" | "minimal" | "extensive";
 };
 
 export type TelegramTopicConfig = {

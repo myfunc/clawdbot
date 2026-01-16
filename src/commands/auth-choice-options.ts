@@ -1,8 +1,5 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
-} from "../agents/auth-profiles.js";
+import { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { AuthChoice } from "./onboard-types.js";
 
@@ -45,7 +42,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    hint: "Claude CLI + API key",
+    hint: "Claude Code CLI + API key",
     choices: ["claude-cli", "setup-token", "token", "apiKey"],
   },
   {
@@ -92,10 +89,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
 ];
 
-function formatOAuthHint(
-  expires?: number,
-  opts?: { allowStale?: boolean },
-): string {
+function formatOAuthHint(expires?: number, opts?: { allowStale?: boolean }): string {
   const rich = isRich();
   if (!expires) {
     return colorize(rich, theme.muted, "token unavailable");
@@ -144,13 +138,13 @@ export function buildAuthChoiceOptions(params: {
   if (claudeCli?.type === "oauth" || claudeCli?.type === "token") {
     options.push({
       value: "claude-cli",
-      label: "Anthropic token (Claude CLI)",
+      label: "Anthropic token (Claude Code CLI)",
       hint: formatOAuthHint(claudeCli.expires),
     });
   } else if (params.includeClaudeCliIfMissing && platform === "darwin") {
     options.push({
       value: "claude-cli",
-      label: "Anthropic token (Claude CLI)",
+      label: "Anthropic token (Claude Code CLI)",
       hint: "requires Keychain access",
     });
   }

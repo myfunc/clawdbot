@@ -215,6 +215,7 @@ describe("discord groupPolicy gating", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "open",
+        guildAllowlisted: false,
         channelAllowlistConfigured: false,
         channelAllowed: false,
       }),
@@ -225,26 +226,40 @@ describe("discord groupPolicy gating", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "disabled",
+        guildAllowlisted: true,
         channelAllowlistConfigured: true,
         channelAllowed: true,
       }),
     ).toBe(false);
   });
 
-  it("blocks allowlist when no channel allowlist configured", () => {
+  it("blocks allowlist when guild is not allowlisted", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "allowlist",
+        guildAllowlisted: false,
         channelAllowlistConfigured: false,
         channelAllowed: true,
       }),
     ).toBe(false);
   });
 
+  it("allows allowlist when guild allowlisted but no channel allowlist", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        guildAllowlisted: true,
+        channelAllowlistConfigured: false,
+        channelAllowed: true,
+      }),
+    ).toBe(true);
+  });
+
   it("allows allowlist when channel is allowed", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "allowlist",
+        guildAllowlisted: true,
         channelAllowlistConfigured: true,
         channelAllowed: true,
       }),
@@ -255,6 +270,7 @@ describe("discord groupPolicy gating", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "allowlist",
+        guildAllowlisted: true,
         channelAllowlistConfigured: true,
         channelAllowed: false,
       }),
@@ -342,10 +358,7 @@ describe("discord reply target selection", () => {
 
 describe("discord autoThread name sanitization", () => {
   it("strips mentions and collapses whitespace", () => {
-    const name = sanitizeDiscordThreadName(
-      "  <@123>  <@&456> <#789>  Help   here  ",
-      "msg-1",
-    );
+    const name = sanitizeDiscordThreadName("  <@123>  <@&456> <#789>  Help   here  ", "msg-1");
     expect(name).toBe("Help here");
   });
 
@@ -449,15 +462,7 @@ describe("discord media payload", () => {
     expect(payload.MediaPath).toBe("/tmp/a.png");
     expect(payload.MediaUrl).toBe("/tmp/a.png");
     expect(payload.MediaType).toBe("image/png");
-    expect(payload.MediaPaths).toEqual([
-      "/tmp/a.png",
-      "/tmp/b.png",
-      "/tmp/c.png",
-    ]);
-    expect(payload.MediaUrls).toEqual([
-      "/tmp/a.png",
-      "/tmp/b.png",
-      "/tmp/c.png",
-    ]);
+    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
+    expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
   });
 });

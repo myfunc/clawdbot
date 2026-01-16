@@ -1,13 +1,8 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../../channels/plugins/index.js";
-import type {
-  ChannelId,
-  ChannelOutboundTargetMode,
-} from "../../channels/plugins/types.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
@@ -24,9 +19,7 @@ export type OutboundTarget = {
   reason?: string;
 };
 
-export type OutboundTargetResolution =
-  | { ok: true; to: string }
-  | { ok: false; error: Error };
+export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
@@ -87,9 +80,11 @@ export function resolveOutboundTarget(params: {
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: ClawdbotConfig;
   entry?: SessionEntry;
+  heartbeat?: AgentDefaultsConfig["heartbeat"];
 }): OutboundTarget {
   const { cfg, entry } = params;
-  const rawTarget = cfg.agents?.defaults?.heartbeat?.target;
+  const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
+  const rawTarget = heartbeat?.target;
   let target: HeartbeatTarget = "last";
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
@@ -103,10 +98,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   const explicitTo =
-    typeof cfg.agents?.defaults?.heartbeat?.to === "string" &&
-    cfg.agents.defaults.heartbeat.to.trim()
-      ? cfg.agents.defaults.heartbeat.to.trim()
-      : undefined;
+    typeof heartbeat?.to === "string" && heartbeat.to.trim() ? heartbeat.to.trim() : undefined;
 
   const lastChannel =
     entry?.lastChannel && entry.lastChannel !== INTERNAL_MESSAGE_CHANNEL
@@ -151,7 +143,5 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
-  return reason
-    ? { channel, to: resolved.to, reason }
-    : { channel, to: resolved.to };
+  return reason ? { channel, to: resolved.to, reason } : { channel, to: resolved.to };
 }

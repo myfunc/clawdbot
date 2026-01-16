@@ -9,10 +9,7 @@ import {
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../gateway/protocol/client-info.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
@@ -132,10 +129,9 @@ type MessageToolOptions = {
 function buildMessageToolSchema(cfg: ClawdbotConfig) {
   const actions = listChannelMessageActions(cfg);
   const includeButtons = supportsChannelMessageButtons(cfg);
-  return buildMessageToolSchemaFromActions(
-    actions.length > 0 ? actions : ["send"],
-    { includeButtons },
-  );
+  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
+    includeButtons,
+  });
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
@@ -146,15 +142,13 @@ function resolveAgentAccountId(value?: string): string | undefined {
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
-  const schema = options?.config
-    ? buildMessageToolSchema(options.config)
-    : MessageToolSchema;
+  const schema = options?.config ? buildMessageToolSchema(options.config) : MessageToolSchema;
 
   return {
     label: "Message",
     name: "message",
     description:
-      "Send messages and channel actions (polls, reactions, pins, threads, etc.) via configured channel plugins.",
+      "Send, delete, and manage messages via channel plugins. Supports actions: send, delete, react, poll, pin, threads, and more.",
     parameters: schema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

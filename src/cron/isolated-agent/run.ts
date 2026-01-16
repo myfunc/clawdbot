@@ -7,11 +7,7 @@ import {
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
-} from "../../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -24,6 +20,7 @@ import {
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -32,19 +29,14 @@ import {
   normalizeThinkLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
-import type { CliDeps } from "../../cli/deps.js";
+import { createOutboundSendDeps, type CliDeps } from "../../cli/deps.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  resolveSessionTranscriptPath,
-  saveSessionStore,
-} from "../../config/sessions.js";
+import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-import {
-  buildAgentMainSessionKey,
-  normalizeAgentId,
-} from "../../routing/session-key.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import type { CronJob } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
@@ -77,17 +69,12 @@ export async function runCronIsolatedAgentTurn(params: {
       : typeof params.job.agentId === "string" && params.job.agentId.trim()
         ? params.job.agentId
         : undefined;
-  const normalizedRequested = requestedAgentId
-    ? normalizeAgentId(requestedAgentId)
-    : undefined;
+  const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
   const agentConfigOverride = normalizedRequested
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
-  const { model: overrideModel, ...agentOverrideRest } =
-    agentConfigOverride ?? {};
-  const agentId = agentConfigOverride
-    ? (normalizedRequested ?? defaultAgentId)
-    : defaultAgentId;
+  const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
+  const agentId = agentConfigOverride ? (normalizedRequested ?? defaultAgentId) : defaultAgentId;
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
     params.cfg.agents?.defaults,
@@ -103,9 +90,7 @@ export async function runCronIsolatedAgentTurn(params: {
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };
 
-  const baseSessionKey = (
-    params.sessionKey?.trim() || `cron:${params.job.id}`
-  ).trim();
+  const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
   const agentSessionKey = buildAgentMainSessionKey({
     agentId,
     mainKey: baseSessionKey,
@@ -154,9 +139,7 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
   const modelOverrideRaw =
-    params.job.payload.kind === "agentTurn"
-      ? params.job.payload.model
-      : undefined;
+    params.job.payload.kind === "agentTurn" ? params.job.payload.model : undefined;
   if (modelOverrideRaw !== undefined) {
     if (typeof modelOverrideRaw !== "string") {
       return { status: "error", error: "invalid model: expected string" };
@@ -188,9 +171,8 @@ export async function runCronIsolatedAgentTurn(params: {
     : undefined;
   const thinkOverride = normalizeThinkLevel(agentCfg?.thinkingDefault);
   const jobThink = normalizeThinkLevel(
-    (params.job.payload.kind === "agentTurn"
-      ? params.job.payload.thinking
-      : undefined) ?? undefined,
+    (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
+      undefined,
   );
   let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
   if (!thinkLevel) {
@@ -202,50 +184,35 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   }
   if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    throw new Error(
-      `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
-    );
+    throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
   }
 
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: cfgWithAgentDefaults,
     overrideSeconds:
-      params.job.payload.kind === "agentTurn"
-        ? params.job.payload.timeoutSeconds
-        : undefined,
+      params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
   });
 
-  const delivery =
-    params.job.payload.kind === "agentTurn" &&
-    params.job.payload.deliver === true;
+  const delivery = params.job.payload.kind === "agentTurn" && params.job.payload.deliver === true;
   const bestEffortDeliver =
-    params.job.payload.kind === "agentTurn" &&
-    params.job.payload.bestEffortDeliver === true;
+    params.job.payload.kind === "agentTurn" && params.job.payload.bestEffortDeliver === true;
 
-  const resolvedDelivery = await resolveDeliveryTarget(
-    cfgWithAgentDefaults,
-    agentId,
-    {
-      channel:
-        params.job.payload.kind === "agentTurn"
-          ? (params.job.payload.channel ?? "last")
-          : "last",
-      to:
-        params.job.payload.kind === "agentTurn"
-          ? params.job.payload.to
-          : undefined,
-    },
-  );
+  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
+    channel:
+      params.job.payload.kind === "agentTurn" ? (params.job.payload.channel ?? "last") : "last",
+    to: params.job.payload.kind === "agentTurn" ? params.job.payload.to : undefined,
+  });
 
-  const base =
-    `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
+  const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
   const commandBody = base;
 
-  const needsSkillsSnapshot =
-    cronSession.isNewSession || !cronSession.sessionEntry.skillsSnapshot;
+  const needsSkillsSnapshot = cronSession.isNewSession || !cronSession.sessionEntry.skillsSnapshot;
+  const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const skillsSnapshot = needsSkillsSnapshot
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
+        eligibility: { remote: getRemoteSkillEligibility() },
+        snapshotVersion: skillsSnapshotVersion,
       })
     : cronSession.sessionEntry.skillsSnapshot;
   if (needsSkillsSnapshot && skillsSnapshot) {
@@ -255,22 +222,23 @@ export async function runCronIsolatedAgentTurn(params: {
       skillsSnapshot,
     };
     cronSession.store[agentSessionKey] = cronSession.sessionEntry;
-    await saveSessionStore(cronSession.storePath, cronSession.store);
+    await updateSessionStore(cronSession.storePath, (store) => {
+      store[agentSessionKey] = cronSession.sessionEntry;
+    });
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
   cronSession.sessionEntry.systemSent = true;
   cronSession.store[agentSessionKey] = cronSession.sessionEntry;
-  await saveSessionStore(cronSession.storePath, cronSession.store);
+  await updateSessionStore(cronSession.storePath, (store) => {
+    store[agentSessionKey] = cronSession.sessionEntry;
+  });
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
   try {
-    const sessionFile = resolveSessionTranscriptPath(
-      cronSession.sessionEntry.sessionId,
-      agentId,
-    );
+    const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
     const resolvedVerboseLevel =
       (cronSession.sessionEntry.verboseLevel as "on" | "off" | undefined) ??
       (agentCfg?.verboseDefault as "on" | "off" | undefined);
@@ -283,16 +251,10 @@ export async function runCronIsolatedAgentTurn(params: {
       cfg: cfgWithAgentDefaults,
       provider,
       model,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(
-        params.cfg,
-        agentId,
-      ),
+      fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          const cliSessionId = getCliSessionId(
-            cronSession.sessionEntry,
-            providerOverride,
-          );
+          const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,
@@ -340,12 +302,9 @@ export async function runCronIsolatedAgentTurn(params: {
   {
     const usage = runResult.meta.agentMeta?.usage;
     const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed =
-      runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
+    const providerUsed = runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
-      agentCfg?.contextTokens ??
-      lookupContextTokens(modelUsed) ??
-      DEFAULT_CONTEXT_TOKENS;
+      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
@@ -359,30 +318,28 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      const promptTokens =
-        input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      const promptTokens = input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
       cronSession.sessionEntry.totalTokens =
         promptTokens > 0 ? promptTokens : (usage.total ?? input);
     }
     cronSession.store[agentSessionKey] = cronSession.sessionEntry;
-    await saveSessionStore(cronSession.storePath, cronSession.store);
+    await updateSessionStore(cronSession.storePath, (store) => {
+      store[agentSessionKey] = cronSession.sessionEntry;
+    });
   }
   const firstText = payloads[0]?.text ?? "";
-  const summary =
-    pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
+  const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
-  const skipHeartbeatDelivery =
-    delivery && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const skipHeartbeatDelivery = delivery && isHeartbeatOnlyResponse(payloads, ackMaxChars);
 
   if (delivery && !skipHeartbeatDelivery) {
     if (!resolvedDelivery.to) {
       const reason =
-        resolvedDelivery.error?.message ??
-        "Cron delivery requires a recipient (--to).";
+        resolvedDelivery.error?.message ?? "Cron delivery requires a recipient (--to).";
       if (!bestEffortDeliver) {
         return {
           status: "error",
@@ -403,23 +360,7 @@ export async function runCronIsolatedAgentTurn(params: {
         accountId: resolvedDelivery.accountId,
         payloads,
         bestEffort: bestEffortDeliver,
-        deps: {
-          sendWhatsApp: params.deps.sendMessageWhatsApp,
-          sendTelegram: params.deps.sendMessageTelegram,
-          sendDiscord: params.deps.sendMessageDiscord,
-          sendSlack: params.deps.sendMessageSlack,
-          sendSignal: params.deps.sendMessageSignal,
-          sendIMessage: params.deps.sendMessageIMessage,
-          sendMSTeams: params.deps.sendMessageMSTeams
-            ? async (to, text, opts) =>
-                await params.deps.sendMessageMSTeams({
-                  cfg: params.cfg,
-                  to,
-                  text,
-                  mediaUrl: opts?.mediaUrl,
-                })
-            : undefined,
-        },
+        deps: createOutboundSendDeps(params.deps),
       });
     } catch (err) {
       if (!bestEffortDeliver) {

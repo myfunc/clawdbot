@@ -17,6 +17,7 @@ const editChannelDiscord = vi.fn(async () => ({
   name: "edited",
 }));
 const editMessageDiscord = vi.fn(async () => ({}));
+const fetchMessageDiscord = vi.fn(async () => ({}));
 const fetchChannelPermissionsDiscord = vi.fn(async () => ({}));
 const fetchReactionsDiscord = vi.fn(async () => ({}));
 const listPinsDiscord = vi.fn(async () => ({}));
@@ -42,8 +43,8 @@ vi.mock("../../discord/send.js", () => ({
   deleteMessageDiscord: (...args: unknown[]) => deleteMessageDiscord(...args),
   editChannelDiscord: (...args: unknown[]) => editChannelDiscord(...args),
   editMessageDiscord: (...args: unknown[]) => editMessageDiscord(...args),
-  fetchChannelPermissionsDiscord: (...args: unknown[]) =>
-    fetchChannelPermissionsDiscord(...args),
+  fetchMessageDiscord: (...args: unknown[]) => fetchMessageDiscord(...args),
+  fetchChannelPermissionsDiscord: (...args: unknown[]) => fetchChannelPermissionsDiscord(...args),
   fetchReactionsDiscord: (...args: unknown[]) => fetchReactionsDiscord(...args),
   listPinsDiscord: (...args: unknown[]) => listPinsDiscord(...args),
   listThreadsDiscord: (...args: unknown[]) => listThreadsDiscord(...args),
@@ -51,17 +52,14 @@ vi.mock("../../discord/send.js", () => ({
   pinMessageDiscord: (...args: unknown[]) => pinMessageDiscord(...args),
   reactMessageDiscord: (...args: unknown[]) => reactMessageDiscord(...args),
   readMessagesDiscord: (...args: unknown[]) => readMessagesDiscord(...args),
-  removeChannelPermissionDiscord: (...args: unknown[]) =>
-    removeChannelPermissionDiscord(...args),
-  removeOwnReactionsDiscord: (...args: unknown[]) =>
-    removeOwnReactionsDiscord(...args),
+  removeChannelPermissionDiscord: (...args: unknown[]) => removeChannelPermissionDiscord(...args),
+  removeOwnReactionsDiscord: (...args: unknown[]) => removeOwnReactionsDiscord(...args),
   removeReactionDiscord: (...args: unknown[]) => removeReactionDiscord(...args),
   searchMessagesDiscord: (...args: unknown[]) => searchMessagesDiscord(...args),
   sendMessageDiscord: (...args: unknown[]) => sendMessageDiscord(...args),
   sendPollDiscord: (...args: unknown[]) => sendPollDiscord(...args),
   sendStickerDiscord: (...args: unknown[]) => sendStickerDiscord(...args),
-  setChannelPermissionDiscord: (...args: unknown[]) =>
-    setChannelPermissionDiscord(...args),
+  setChannelPermissionDiscord: (...args: unknown[]) => setChannelPermissionDiscord(...args),
   unpinMessageDiscord: (...args: unknown[]) => unpinMessageDiscord(...args),
 }));
 
@@ -138,6 +136,80 @@ describe("handleDiscordMessagingAction", () => {
       ),
     ).rejects.toThrow(/Discord reactions are disabled/);
   });
+
+  it("adds normalized timestamps to readMessages payloads", async () => {
+    readMessagesDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T10:00:00.000Z" }]);
+
+    const result = await handleDiscordMessagingAction(
+      "readMessages",
+      { channelId: "C1" },
+      enableAllActions,
+    );
+    const payload = result.details as {
+      messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
+    };
+
+    const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
+    expect(payload.messages[0].timestampMs).toBe(expectedMs);
+    expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("adds normalized timestamps to fetchMessage payloads", async () => {
+    fetchMessageDiscord.mockResolvedValueOnce({
+      id: "1",
+      timestamp: "2026-01-15T11:00:00.000Z",
+    });
+
+    const result = await handleDiscordMessagingAction(
+      "fetchMessage",
+      { guildId: "G1", channelId: "C1", messageId: "M1" },
+      enableAllActions,
+    );
+    const payload = result.details as { message?: { timestampMs?: number; timestampUtc?: string } };
+
+    const expectedMs = Date.parse("2026-01-15T11:00:00.000Z");
+    expect(payload.message?.timestampMs).toBe(expectedMs);
+    expect(payload.message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("adds normalized timestamps to listPins payloads", async () => {
+    listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
+
+    const result = await handleDiscordMessagingAction(
+      "listPins",
+      { channelId: "C1" },
+      enableAllActions,
+    );
+    const payload = result.details as {
+      pins: Array<{ timestampMs?: number; timestampUtc?: string }>;
+    };
+
+    const expectedMs = Date.parse("2026-01-15T12:00:00.000Z");
+    expect(payload.pins[0].timestampMs).toBe(expectedMs);
+    expect(payload.pins[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("adds normalized timestamps to searchMessages payloads", async () => {
+    searchMessagesDiscord.mockResolvedValueOnce({
+      total_results: 1,
+      messages: [[{ id: "1", timestamp: "2026-01-15T13:00:00.000Z" }]],
+    });
+
+    const result = await handleDiscordMessagingAction(
+      "searchMessages",
+      { guildId: "G1", content: "hi" },
+      enableAllActions,
+    );
+    const payload = result.details as {
+      results?: { messages?: Array<Array<{ timestampMs?: number; timestampUtc?: string }>> };
+    };
+
+    const expectedMs = Date.parse("2026-01-15T13:00:00.000Z");
+    expect(payload.results?.messages?.[0]?.[0]?.timestampMs).toBe(expectedMs);
+    expect(payload.results?.messages?.[0]?.[0]?.timestampUtc).toBe(
+      new Date(expectedMs).toISOString(),
+    );
+  });
 });
 
 const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
@@ -169,11 +241,7 @@ describe("handleDiscordGuildAction - channel management", () => {
 
   it("respects channel gating for channelCreate", async () => {
     await expect(
-      handleDiscordGuildAction(
-        "channelCreate",
-        { guildId: "G1", name: "test" },
-        channelsDisabled,
-      ),
+      handleDiscordGuildAction("channelCreate", { guildId: "G1", name: "test" }, channelsDisabled),
     ).rejects.toThrow(/Discord channel management is disabled/);
   });
 
@@ -239,11 +307,7 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a channel", async () => {
-    await handleDiscordGuildAction(
-      "channelDelete",
-      { channelId: "C1" },
-      channelsEnabled,
-    );
+    await handleDiscordGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
     expect(deleteChannelDiscord).toHaveBeenCalledWith("C1");
   });
 
@@ -330,11 +394,7 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a category", async () => {
-    await handleDiscordGuildAction(
-      "categoryDelete",
-      { categoryId: "CAT1" },
-      channelsEnabled,
-    );
+    await handleDiscordGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
     expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1");
   });
 

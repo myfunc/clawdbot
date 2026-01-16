@@ -36,6 +36,7 @@ export const TelegramAccountSchemaBase = z.object({
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
+  configWrites: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   botToken: z.string().optional(),
   tokenFile: z.string().optional(),
@@ -53,6 +54,7 @@ export const TelegramAccountSchemaBase = z.object({
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
   mediaMaxMb: z.number().positive().optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
   retry: RetryConfigSchema,
   proxy: z.string().optional(),
   webhookUrl: z.string().optional(),
@@ -61,22 +63,24 @@ export const TelegramAccountSchemaBase = z.object({
   actions: z
     .object({
       reactions: z.boolean().optional(),
+      sendMessage: z.boolean().optional(),
+      deleteMessage: z.boolean().optional(),
     })
     .optional(),
+  reactionNotifications: z.enum(["off", "own", "all"]).optional(),
+  reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
 });
 
-export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine(
-  (value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
-    });
-  },
-);
+export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
+  });
+});
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
@@ -125,9 +129,7 @@ export const DiscordGuildSchema = z.object({
   requireMention: z.boolean().optional(),
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   users: z.array(z.union([z.string(), z.number()])).optional(),
-  channels: z
-    .record(z.string(), DiscordGuildChannelSchema.optional())
-    .optional(),
+  channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
 });
 
 export const DiscordAccountSchema = z.object({
@@ -135,6 +137,7 @@ export const DiscordAccountSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
+  configWrites: z.boolean().optional(),
   token: z.string().optional(),
   allowBots: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -204,14 +207,23 @@ export const SlackChannelSchema = z.object({
   systemPrompt: z.string().optional(),
 });
 
+export const SlackThreadSchema = z.object({
+  historyScope: z.enum(["thread", "channel"]).optional(),
+  inheritParent: z.boolean().optional(),
+});
+
 export const SlackAccountSchema = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
+  configWrites: z.boolean().optional(),
   botToken: z.string().optional(),
   appToken: z.string().optional(),
+  userToken: z.string().optional(),
+  userTokenReadOnly: z.boolean().optional().default(true),
   allowBots: z.boolean().optional(),
+  requireMention: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
@@ -223,6 +235,7 @@ export const SlackAccountSchema = z.object({
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
   replyToMode: ReplyToModeSchema.optional(),
+  thread: SlackThreadSchema.optional(),
   actions: z
     .object({
       reactions: z.boolean().optional(),
@@ -255,6 +268,7 @@ export const SignalAccountSchemaBase = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   account: z.string().optional(),
   httpUrl: z.string().optional(),
   httpHost: z.string().optional(),
@@ -280,18 +294,15 @@ export const SignalAccountSchemaBase = z.object({
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
 });
 
-export const SignalAccountSchema = SignalAccountSchemaBase.superRefine(
-  (value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
-    });
-  },
-);
+export const SignalAccountSchema = SignalAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
+  });
+});
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
@@ -301,8 +312,7 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
     allowFrom: value.allowFrom,
     ctx,
     path: ["allowFrom"],
-    message:
-      'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
+    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
   });
 });
 
@@ -310,11 +320,10 @@ export const IMessageAccountSchemaBase = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   cliPath: ExecutableTokenSchema.optional(),
   dbPath: z.string().optional(),
-  service: z
-    .union([z.literal("imessage"), z.literal("sms"), z.literal("auto")])
-    .optional(),
+  service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
   region: z.string().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -340,18 +349,16 @@ export const IMessageAccountSchemaBase = z.object({
     .optional(),
 });
 
-export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine(
-  (value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
-    });
-  },
-);
+export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
+  });
+});
 
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   accounts: z.record(z.string(), IMessageAccountSchema.optional()).optional(),
@@ -381,6 +388,7 @@ export const MSTeamsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     capabilities: z.array(z.string()).optional(),
+    configWrites: z.boolean().optional(),
     appId: z.string().optional(),
     appPassword: z.string().optional(),
     tenantId: z.string().optional(),

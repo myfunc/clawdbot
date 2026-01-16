@@ -9,7 +9,7 @@
 
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -27,8 +27,8 @@ export type RouteReplyParams = {
   sessionKey?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
-  /** Telegram message thread id (forum topics). */
-  threadId?: number;
+  /** Thread id for replies (Telegram topic id or Matrix thread event id). */
+  threadId?: string | number;
   /** Config for provider-specific settings. */
   cfg: ClawdbotConfig;
   /** Optional abort signal for cooperative cancellation. */
@@ -52,11 +52,8 @@ export type RouteReplyResult = {
  * back to the originating channel when OriginatingChannel/OriginatingTo
  * are set.
  */
-export async function routeReply(
-  params: RouteReplyParams,
-): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, cfg, abortSignal } =
-    params;
+export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
+  const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = params.sessionKey
@@ -106,9 +103,7 @@ export async function routeReply(
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await import(
-      "../../infra/outbound/deliver.js"
-    );
+    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
     const results = await deliverOutboundPayloads({
       cfg,
       channel: channelId,

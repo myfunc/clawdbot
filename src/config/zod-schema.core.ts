@@ -88,11 +88,7 @@ export const QueueDropSchema = z.union([
   z.literal("new"),
   z.literal("summarize"),
 ]);
-export const ReplyToModeSchema = z.union([
-  z.literal("off"),
-  z.literal("first"),
-  z.literal("all"),
-]);
+export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), z.literal("all")]);
 
 // GroupPolicySchema: controls how group messages are handled
 // Used with .default("allowlist").optional() pattern:
@@ -100,12 +96,7 @@ export const ReplyToModeSchema = z.union([
 //   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
-export const DmPolicySchema = z.enum([
-  "pairing",
-  "allowlist",
-  "open",
-  "disabled",
-]);
+export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
 
 export const BlockStreamingCoalesceSchema = z.object({
   minChars: z.number().int().positive().optional(),
@@ -117,18 +108,12 @@ export const BlockStreamingChunkSchema = z.object({
   minChars: z.number().int().positive().optional(),
   maxChars: z.number().int().positive().optional(),
   breakPreference: z
-    .union([
-      z.literal("paragraph"),
-      z.literal("newline"),
-      z.literal("sentence"),
-    ])
+    .union([z.literal("paragraph"), z.literal("newline"), z.literal("sentence")])
     .optional(),
 });
 
 export const HumanDelaySchema = z.object({
-  mode: z
-    .union([z.literal("off"), z.literal("natural"), z.literal("custom")])
-    .optional(),
+  mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),
   minMs: z.number().int().nonnegative().optional(),
   maxMs: z.number().int().nonnegative().optional(),
 });
@@ -136,12 +121,8 @@ export const HumanDelaySchema = z.object({
 export const CliBackendSchema = z.object({
   command: z.string(),
   args: z.array(z.string()).optional(),
-  output: z
-    .union([z.literal("json"), z.literal("text"), z.literal("jsonl")])
-    .optional(),
-  resumeOutput: z
-    .union([z.literal("json"), z.literal("text"), z.literal("jsonl")])
-    .optional(),
+  output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
+  resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
   input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
   maxPromptArgChars: z.number().int().positive().optional(),
   env: z.record(z.string(), z.string()).optional(),
@@ -151,14 +132,10 @@ export const CliBackendSchema = z.object({
   sessionArg: z.string().optional(),
   sessionArgs: z.array(z.string()).optional(),
   resumeArgs: z.array(z.string()).optional(),
-  sessionMode: z
-    .union([z.literal("always"), z.literal("existing"), z.literal("none")])
-    .optional(),
+  sessionMode: z.union([z.literal("always"), z.literal("existing"), z.literal("none")]).optional(),
   sessionIdFields: z.array(z.string()).optional(),
   systemPromptArg: z.string().optional(),
-  systemPromptMode: z
-    .union([z.literal("append"), z.literal("replace")])
-    .optional(),
+  systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
   systemPromptWhen: z
     .union([z.literal("first"), z.literal("always"), z.literal("never")])
     .optional(),
@@ -211,6 +188,19 @@ export const QueueModeBySurfaceSchema = z
   })
   .optional();
 
+export const DebounceMsBySurfaceSchema = z
+  .object({
+    whatsapp: z.number().int().nonnegative().optional(),
+    telegram: z.number().int().nonnegative().optional(),
+    discord: z.number().int().nonnegative().optional(),
+    slack: z.number().int().nonnegative().optional(),
+    signal: z.number().int().nonnegative().optional(),
+    imessage: z.number().int().nonnegative().optional(),
+    msteams: z.number().int().nonnegative().optional(),
+    webchat: z.number().int().nonnegative().optional(),
+  })
+  .optional();
+
 export const QueueSchema = z
   .object({
     mode: QueueModeSchema.optional(),
@@ -218,6 +208,13 @@ export const QueueSchema = z
     debounceMs: z.number().int().nonnegative().optional(),
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),
+  })
+  .optional();
+
+export const InboundDebounceSchema = z
+  .object({
+    debounceMs: z.number().int().nonnegative().optional(),
+    byChannel: DebounceMsBySurfaceSchema,
   })
   .optional();
 
@@ -237,9 +234,7 @@ export const TranscribeAudioSchema = z
   })
   .optional();
 
-export const HexColorSchema = z
-  .string()
-  .regex(/^#?[0-9a-fA-F]{6}$/, "expected hex color (RRGGBB)");
+export const HexColorSchema = z.string().regex(/^#?[0-9a-fA-F]{6}$/, "expected hex color (RRGGBB)");
 
 export const ExecutableTokenSchema = z
   .string()
@@ -252,10 +247,7 @@ export const ToolsAudioTranscriptionSchema = z
   })
   .optional();
 
-export const NativeCommandsSettingSchema = z.union([
-  z.boolean(),
-  z.literal("auto"),
-]);
+export const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
 
 export const ProviderCommandsSchema = z
   .object({

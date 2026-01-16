@@ -51,7 +51,7 @@ pnpm gateway:watch
 
 Usually unnecessary: one Gateway can serve multiple messaging channels and agents. Use multiple Gateways only for redundancy or strict isolation (ex: rescue bot).
 
-Supported if you isolate state + config and use unique ports.
+Supported if you isolate state + config and use unique ports. Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 Service names are profile-aware:
 - macOS: `com.clawdbot.<profile>`
@@ -62,6 +62,8 @@ Install metadata is embedded in the service config:
 - `CLAWDBOT_SERVICE_MARKER=clawdbot`
 - `CLAWDBOT_SERVICE_KIND=gateway`
 - `CLAWDBOT_SERVICE_VERSION=<version>`
+
+Rescue-Bot Pattern: keep a second Gateway isolated with its own profile, state dir, workspace, and base port spacing. Full guide: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
 
 ### Dev profile (`--dev`)
 
@@ -205,7 +207,7 @@ Notes:
 - `daemon status` includes the last gateway error line when the service looks running but the port is closed.
 - `logs` tails the Gateway file log via RPC (no manual `tail`/`grep` needed).
 - If other gateway-like services are detected, the CLI warns unless they are Clawdbot profile services.
-  We still recommend **one gateway per machine** unless you need redundant profiles.
+  We still recommend **one gateway per machine** for most setups; use isolated profiles/ports for redundancy or a rescue bot. See [Multiple gateways](/gateway/multiple-gateways).
   - Cleanup: `clawdbot daemon uninstall` (current service) and `clawdbot doctor` (legacy migrations).
 - `daemon install` is a no-op when already installed; use `clawdbot daemon install --force` to reinstall (profile/env/path changes).
 

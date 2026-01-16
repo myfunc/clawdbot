@@ -33,11 +33,7 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
 };
 
-export type DiscordReactionNotificationMode =
-  | "off"
-  | "own"
-  | "all"
-  | "allowlist";
+export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
 export type DiscordGuildEntry = {
   slug?: string;
@@ -76,6 +72,8 @@ export type DiscordAccountConfig = {
   capabilities?: string[];
   /** Override native command registration for Discord (bool or "auto"). */
   commands?: ProviderCommandsConfig;
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;

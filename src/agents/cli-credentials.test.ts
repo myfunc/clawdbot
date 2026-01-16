@@ -42,9 +42,7 @@ describe("cli credentials", () => {
       return "";
     });
 
-    const { writeClaudeCliKeychainCredentials } = await import(
-      "./cli-credentials.js"
-    );
+    const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
     const ok = writeClaudeCliKeychainCredentials({
       access: "new-access",
@@ -53,13 +51,9 @@ describe("cli credentials", () => {
     });
 
     expect(ok).toBe(true);
-    expect(
-      commands.some((cmd) => cmd.includes("delete-generic-password")),
-    ).toBe(false);
+    expect(commands.some((cmd) => cmd.includes("delete-generic-password"))).toBe(false);
 
-    const updateCommand = commands.find((cmd) =>
-      cmd.includes("add-generic-password"),
-    );
+    const updateCommand = commands.find((cmd) => cmd.includes("add-generic-password"));
     expect(updateCommand).toContain("-U");
   });
 
@@ -117,7 +111,7 @@ describe("cli credentials", () => {
     expect(updated.claudeAiOauth?.expiresAt).toBeTypeOf("number");
   });
 
-  it("caches Claude CLI credentials within the TTL window", async () => {
+  it("caches Claude Code CLI credentials within the TTL window", async () => {
     execSyncMock.mockImplementation(() =>
       JSON.stringify({
         claudeAiOauth: {
@@ -130,9 +124,7 @@ describe("cli credentials", () => {
 
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    const { readClaudeCliCredentialsCached } = await import(
-      "./cli-credentials.js"
-    );
+    const { readClaudeCliCredentialsCached } = await import("./cli-credentials.js");
 
     const first = readClaudeCliCredentialsCached({
       allowKeychainPrompt: true,
@@ -150,7 +142,7 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes Claude CLI credentials after the TTL window", async () => {
+  it("refreshes Claude Code CLI credentials after the TTL window", async () => {
     execSyncMock.mockImplementation(() =>
       JSON.stringify({
         claudeAiOauth: {
@@ -163,9 +155,7 @@ describe("cli credentials", () => {
 
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    const { readClaudeCliCredentialsCached } = await import(
-      "./cli-credentials.js"
-    );
+    const { readClaudeCliCredentialsCached } = await import("./cli-credentials.js");
 
     const first = readClaudeCliCredentialsCached({
       allowKeychainPrompt: true,

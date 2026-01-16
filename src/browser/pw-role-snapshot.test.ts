@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
   getRoleSnapshotStats,
   parseRoleRef,
@@ -27,9 +28,7 @@ describe("pw-role-snapshot", () => {
   });
 
   it("uses nth only when duplicates exist", () => {
-    const aria = ['- button "OK"', '- button "OK"', '- button "Cancel"'].join(
-      "\n",
-    );
+    const aria = ['- button "OK"', '- button "OK"', '- button "Cancel"'].join("\n");
     const res = buildRoleSnapshotFromAriaSnapshot(aria);
     expect(res.snapshot).toContain("[ref=e1]");
     expect(res.snapshot).toContain("[ref=e2] [nth=1]");
@@ -38,9 +37,7 @@ describe("pw-role-snapshot", () => {
     expect(res.refs.e3?.nth).toBeUndefined();
   });
   it("respects maxDepth", () => {
-    const aria = ['- region "Main"', "  - group", '    - button "Deep"'].join(
-      "\n",
-    );
+    const aria = ['- region "Main"', "  - group", '    - button "Deep"'].join("\n");
     const res = buildRoleSnapshotFromAriaSnapshot(aria, { maxDepth: 1 });
     expect(res.snapshot).toContain('- region "Main"');
     expect(res.snapshot).toContain("  - group");
@@ -70,5 +67,25 @@ describe("pw-role-snapshot", () => {
     expect(parseRoleRef("ref=e12")).toBe("e12");
     expect(parseRoleRef("12")).toBeNull();
     expect(parseRoleRef("")).toBeNull();
+  });
+
+  it("preserves Playwright aria-ref ids in ai snapshots", () => {
+    const ai = [
+      "- navigation [ref=e1]:",
+      '  - link "Home" [ref=e5]',
+      '  - heading "Title" [ref=e6]',
+      '  - button "Save" [ref=e7] [cursor=pointer]:',
+      "  - paragraph: hello",
+    ].join("\n");
+
+    const res = buildRoleSnapshotFromAiSnapshot(ai, { interactive: true });
+    expect(res.snapshot).toContain("[ref=e5]");
+    expect(res.snapshot).toContain('- link "Home"');
+    expect(res.snapshot).toContain('- button "Save"');
+    expect(res.snapshot).not.toContain("navigation");
+    expect(res.snapshot).not.toContain("heading");
+    expect(Object.keys(res.refs).sort()).toEqual(["e5", "e7"]);
+    expect(res.refs.e5).toMatchObject({ role: "link", name: "Home" });
+    expect(res.refs.e7).toMatchObject({ role: "button", name: "Save" });
   });
 });

@@ -39,9 +39,7 @@ type SnapshotForAIResult = { full: string; incremental?: string };
 type SnapshotForAIOptions = { timeout?: number; track?: string };
 
 export type WithSnapshotForAI = {
-  _snapshotForAI?: (
-    options?: SnapshotForAIOptions,
-  ) => Promise<SnapshotForAIResult>;
+  _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
 };
 
 type TargetInfoResponse = {
@@ -66,10 +64,19 @@ type PageState = {
   armIdDownload: number;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
-   * These refs are NOT Playwright's `aria-ref` values.
+   * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
+   * Mode "aria" refs are Playwright aria-ref ids and resolved via `aria-ref=...`.
    */
   roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
+  roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
+};
+
+type RoleRefs = NonNullable<PageState["roleRefs"]>;
+type RoleRefsCacheEntry = {
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
 };
 
 type ContextState = {
@@ -81,6 +88,11 @@ const contextStates = new WeakMap<BrowserContext, ContextState>();
 const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
 
+// Best-effort cache to make role refs stable even if Playwright returns a different Page object
+// for the same CDP target across requests.
+const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
+const MAX_ROLE_REFS_CACHE = 50;
+
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
@@ -90,6 +102,47 @@ let connecting: Promise<ConnectedBrowser> | null = null;
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function roleRefsKey(cdpUrl: string, targetId: string) {
+  return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
+}
+
+export function rememberRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId: string;
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
+}): void {
+  const targetId = opts.targetId.trim();
+  if (!targetId) return;
+  roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+    refs: opts.refs,
+    ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
+  });
+  while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
+    const first = roleRefsByTarget.keys().next();
+    if (first.done) break;
+    roleRefsByTarget.delete(first.value);
+  }
+}
+
+export function restoreRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  page: Page;
+}): void {
+  const targetId = opts.targetId?.trim() || "";
+  if (!targetId) return;
+  const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
+  if (!cached) return;
+  const state = ensurePageState(opts.page);
+  if (state.roleRefs) return;
+  state.roleRefs = cached.refs;
+  state.roleRefsFrameSelector = cached.frameSelector;
+  state.roleRefsMode = cached.mode;
 }
 
 export function ensurePageState(page: Page): PageState {
@@ -213,9 +266,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(
-          () => null,
-        );
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
         const browser = await chromium.connectOverCDP(endpoint, { timeout });
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized };
@@ -234,9 +285,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     if (lastErr instanceof Error) {
       throw lastErr;
     }
-    const message = lastErr
-      ? formatErrorMessage(lastErr)
-      : "CDP connect failed";
+    const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
     throw new Error(message);
   };
 
@@ -256,9 +305,7 @@ async function getAllPages(browser: Browser): Promise<Page[]> {
 async function pageTargetId(page: Page): Promise<string | null> {
   const session = await page.context().newCDPSession(page);
   try {
-    const info = (await session.send(
-      "Target.getTargetInfo",
-    )) as TargetInfoResponse;
+    const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
     const targetId = String(info?.targetInfo?.targetId ?? "").trim();
     return targetId || null;
   } finally {
@@ -266,10 +313,7 @@ async function pageTargetId(page: Page): Promise<string | null> {
   }
 }
 
-async function findPageByTargetId(
-  browser: Browser,
-  targetId: string,
-): Promise<Page | null> {
+async function findPageByTargetId(browser: Browser, targetId: string): Promise<Page | null> {
   const pages = await getAllPages(browser);
   for (const page of pages) {
     const tid = await pageTargetId(page).catch(() => null);
@@ -284,12 +328,17 @@ export async function getPageForTargetId(opts: {
 }): Promise<Page> {
   const { browser } = await connectBrowser(opts.cdpUrl);
   const pages = await getAllPages(browser);
-  if (!pages.length)
-    throw new Error("No pages available in the connected browser.");
+  if (!pages.length) throw new Error("No pages available in the connected browser.");
   const first = pages[0];
   if (!opts.targetId) return first;
   const found = await findPageByTargetId(browser, opts.targetId);
-  if (!found) throw new Error("tab not found");
+  if (!found) {
+    // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
+    // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
+    // only exposes a single Page, use it as a best-effort fallback.
+    if (pages.length === 1) return first;
+    throw new Error("tab not found");
+  }
   return found;
 }
 
@@ -302,6 +351,12 @@ export function refLocator(page: Page, ref: string) {
 
   if (/^e\d+$/.test(normalized)) {
     const state = pageStates.get(page);
+    if (state?.roleRefsMode === "aria") {
+      const scope = state.roleRefsFrameSelector
+        ? page.frameLocator(state.roleRefsFrameSelector)
+        : page;
+      return scope.locator(`aria-ref=${normalized}`);
+    }
     const info = state?.roleRefs?.[normalized];
     if (!info) {
       throw new Error(

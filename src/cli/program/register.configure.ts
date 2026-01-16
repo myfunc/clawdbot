@@ -5,6 +5,8 @@ import {
   configureCommandWithSections,
 } from "../../commands/configure.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatDocsLink } from "../../terminal/links.js";
+import { theme } from "../../terminal/theme.js";
 
 export function registerConfigureCommand(program: Command) {
   const register = (name: "configure" | "config") => {
@@ -14,6 +16,11 @@ export function registerConfigureCommand(program: Command) {
         name === "config"
           ? "Alias for `clawdbot configure`"
           : "Interactive prompt to set up credentials, devices, and agent defaults",
+      )
+      .addHelpText(
+        "after",
+        () =>
+          `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/configure", "docs.clawd.bot/cli/configure")}\n`,
       )
       .option(
         "--section <section>",
@@ -25,9 +32,7 @@ export function registerConfigureCommand(program: Command) {
         try {
           const sections: string[] = Array.isArray(opts.section)
             ? opts.section
-                .map((value: unknown) =>
-                  typeof value === "string" ? value.trim() : "",
-                )
+                .map((value: unknown) => (typeof value === "string" ? value.trim() : ""))
                 .filter(Boolean)
             : [];
           if (sections.length === 0) {
@@ -35,9 +40,7 @@ export function registerConfigureCommand(program: Command) {
             return;
           }
 
-          const invalid = sections.filter(
-            (s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never),
-          );
+          const invalid = sections.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
           if (invalid.length > 0) {
             defaultRuntime.error(
               `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,

@@ -13,6 +13,7 @@ import {
   buildCliArgs,
   buildSystemPrompt,
   cleanupResumeProcesses,
+  cleanupSuspendedCliProcesses,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
@@ -30,10 +31,7 @@ import {
   resolveBootstrapMaxChars,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
-import {
-  filterBootstrapFilesForSession,
-  loadWorkspaceBootstrapFiles,
-} from "./workspace.js";
+import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 
@@ -58,10 +56,7 @@ export async function runCliAgent(params: {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const workspaceDir = resolvedWorkspace;
 
-  const backendResolved = resolveCliBackendConfig(
-    params.provider,
-    params.config,
-  );
+  const backendResolved = resolveCliBackendConfig(params.provider, params.config);
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
@@ -92,9 +87,7 @@ export async function runCliAgent(params: {
   });
   const heartbeatPrompt =
     sessionAgentId === defaultAgentId
-      ? resolveHeartbeatPrompt(
-          params.config?.agents?.defaults?.heartbeat?.prompt,
-        )
+      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
   const systemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -114,14 +107,12 @@ export async function runCliAgent(params: {
   });
   const useResume = Boolean(
     params.cliSessionId &&
-      cliSessionIdToSend &&
-      backend.resumeArgs &&
-      backend.resumeArgs.length > 0,
+    cliSessionIdToSend &&
+    backend.resumeArgs &&
+    backend.resumeArgs.length > 0,
   );
   const sessionIdSent = cliSessionIdToSend
-    ? useResume ||
-      Boolean(backend.sessionArg) ||
-      Boolean(backend.sessionArgs?.length)
+    ? useResume || Boolean(backend.sessionArg) || Boolean(backend.sessionArgs?.length)
       ? cliSessionIdToSend
       : undefined
     : undefined;
@@ -148,13 +139,9 @@ export async function runCliAgent(params: {
     prompt,
   });
   const stdinPayload = stdin ?? "";
-  const baseArgs = useResume
-    ? (backend.resumeArgs ?? backend.args ?? [])
-    : (backend.args ?? []);
+  const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
-    ? baseArgs.map((entry) =>
-        entry.replaceAll("{sessionId}", cliSessionIdToSend ?? ""),
-      )
+    ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", cliSessionIdToSend ?? ""))
     : baseArgs;
   const args = buildCliArgs({
     backend,
@@ -168,9 +155,7 @@ export async function runCliAgent(params: {
   });
 
   const serialize = backend.serialize ?? true;
-  const queueKey = serialize
-    ? backendResolved.id
-    : `${backendResolved.id}:${params.runId}`;
+  const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
 
   try {
     const output = await enqueueCliRun(queueKey, async () => {
@@ -184,10 +169,7 @@ export async function runCliAgent(params: {
           const arg = args[i] ?? "";
           if (arg === backend.systemPromptArg) {
             const systemPromptValue = args[i + 1] ?? "";
-            logArgs.push(
-              arg,
-              `<systemPrompt:${systemPromptValue.length} chars>`,
-            );
+            logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
             i += 1;
             continue;
           }
@@ -225,6 +207,8 @@ export async function runCliAgent(params: {
         return next;
       })();
 
+      // Cleanup suspended processes that have accumulated (regardless of sessionId)
+      await cleanupSuspendedCliProcesses(backend);
       if (useResume && cliSessionIdToSend) {
         await cleanupResumeProcesses(backend, cliSessionIdToSend);
       }
@@ -259,9 +243,7 @@ export async function runCliAgent(params: {
         });
       }
 
-      const outputMode = useResume
-        ? (backend.resumeOutput ?? backend.output)
-        : backend.output;
+      const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
 
       if (outputMode === "text") {
         return { text: stdout, sessionId: undefined };
@@ -283,8 +265,7 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         agentMeta: {
-          sessionId:
-            output.sessionId ?? sessionIdSent ?? params.sessionId ?? "",
+          sessionId: output.sessionId ?? sessionIdSent ?? params.sessionId ?? "",
           provider: params.provider,
           model: modelId,
           usage: output.usage,

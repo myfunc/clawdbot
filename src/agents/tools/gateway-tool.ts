@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -33,6 +35,7 @@ const GatewayToolSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Number()),
   // config.apply
   raw: Type.Optional(Type.String()),
+  baseHash: Type.Optional(Type.String()),
   // config.apply, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
@@ -58,9 +61,7 @@ export function createGatewayTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
         if (opts?.config?.commands?.restart !== true) {
-          throw new Error(
-            "Gateway restart is disabled. Set commands.restart=true to enable.",
-          );
+          throw new Error("Gateway restart is disabled. Set commands.restart=true to enable.");
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
@@ -75,9 +76,7 @@ export function createGatewayTool(opts?: {
             ? params.reason.trim().slice(0, 200)
             : undefined;
         const note =
-          typeof params.note === "string" && params.note.trim()
-            ? params.note.trim()
-            : undefined;
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",
@@ -114,8 +113,7 @@ export function createGatewayTool(opts?: {
           ? params.gatewayToken.trim()
           : undefined;
       const timeoutMs =
-        typeof params.timeoutMs === "number" &&
-        Number.isFinite(params.timeoutMs)
+        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
           ? Math.max(1, Math.floor(params.timeoutMs))
           : undefined;
       const gatewayOpts = { gatewayUrl, gatewayToken, timeoutMs };
@@ -130,21 +128,34 @@ export function createGatewayTool(opts?: {
       }
       if (action === "config.apply") {
         const raw = readStringParam(params, "raw", { required: true });
+        let baseHash = readStringParam(params, "baseHash");
+        if (!baseHash) {
+          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+          if (snapshot && typeof snapshot === "object") {
+            const hash = (snapshot as { hash?: unknown }).hash;
+            if (typeof hash === "string" && hash.trim()) {
+              baseHash = hash.trim();
+            } else {
+              const rawSnapshot = (snapshot as { raw?: unknown }).raw;
+              if (typeof rawSnapshot === "string") {
+                baseHash = crypto.createHash("sha256").update(rawSnapshot).digest("hex");
+              }
+            }
+          }
+        }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
         const note =
-          typeof params.note === "string" && params.note.trim()
-            ? params.note.trim()
-            : undefined;
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
-          typeof params.restartDelayMs === "number" &&
-          Number.isFinite(params.restartDelayMs)
+          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
+          baseHash,
           sessionKey,
           note,
           restartDelayMs,
@@ -157,12 +168,9 @@ export function createGatewayTool(opts?: {
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
         const note =
-          typeof params.note === "string" && params.note.trim()
-            ? params.note.trim()
-            : undefined;
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
-          typeof params.restartDelayMs === "number" &&
-          Number.isFinite(params.restartDelayMs)
+          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
         const result = await callGatewayTool("update.run", gatewayOpts, {

@@ -20,10 +20,7 @@ function makeCfg(overrides: Partial<ClawdbotConfig> = {}): ClawdbotConfig {
 describe("runWithModelFallback", () => {
   it("does not fall back on non-auth errors", async () => {
     const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("bad request"))
-      .mockResolvedValueOnce("ok");
+    const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
 
     await expect(
       runWithModelFallback({
@@ -60,9 +57,7 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("payment required"), { status: 402 }),
-      )
+      .mockRejectedValueOnce(Object.assign(new Error("payment required"), { status: 402 }))
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
@@ -106,9 +101,7 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
-      .mockRejectedValueOnce(
-        new Error('No credentials found for profile "anthropic:claude-cli".'),
-      )
+      .mockRejectedValueOnce(new Error('No credentials found for profile "anthropic:claude-cli".'))
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
@@ -136,9 +129,7 @@ describe("runWithModelFallback", () => {
     });
     const run = vi
       .fn()
-      .mockImplementation(() =>
-        Promise.reject(Object.assign(new Error("nope"), { status: 401 })),
-      );
+      .mockImplementation(() => Promise.reject(Object.assign(new Error("nope"), { status: 401 })));
 
     await expect(
       runWithModelFallback({
@@ -219,9 +210,35 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("primary failed");
 
-    expect(calls).toEqual([
-      { provider: "anthropic", model: "claude-opus-4-5" },
-    ]);
+    expect(calls).toEqual([{ provider: "anthropic", model: "claude-opus-4-5" }]);
+  });
+
+  it("defaults provider/model when missing (regression #946)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: undefined as unknown as string,
+      model: undefined as unknown as string,
+      run: async (provider, model) => {
+        calls.push({ provider, model });
+        return "ok";
+      },
+    });
+
+    expect(result.result).toBe("ok");
+    expect(calls).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
   });
 
   it("falls back on missing API key errors", async () => {
@@ -277,9 +294,7 @@ describe("runWithModelFallback", () => {
     });
     const run = vi
       .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
-      )
+      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
