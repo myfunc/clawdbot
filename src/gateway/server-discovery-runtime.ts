@@ -11,12 +11,18 @@ export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
   bridgePort?: number;
+  bridgeTls?: { enabled: boolean; fingerprintSha256?: string };
   canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }) {
   let bonjourStop: (() => Promise<void>) | null = null;
-  const tailnetDns = await resolveTailnetDnsHint();
+  const bonjourEnabled =
+    process.env.CLAWDBOT_DISABLE_BONJOUR !== "1" &&
+    process.env.NODE_ENV !== "test" &&
+    !process.env.VITEST;
+  const needsTailnetDns = bonjourEnabled || params.wideAreaDiscoveryEnabled;
+  const tailnetDns = needsTailnetDns ? await resolveTailnetDnsHint() : undefined;
   const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
   const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
   const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
@@ -27,6 +33,8 @@ export async function startGatewayDiscovery(params: {
       gatewayPort: params.port,
       bridgePort: params.bridgePort,
       canvasPort: params.canvasPort,
+      bridgeTlsEnabled: params.bridgeTls?.enabled ?? false,
+      bridgeTlsFingerprintSha256: params.bridgeTls?.fingerprintSha256,
       sshPort,
       tailnetDns,
       cliPath: resolveBonjourCliPath(),
@@ -51,6 +59,8 @@ export async function startGatewayDiscovery(params: {
           displayName: formatBonjourInstanceName(params.machineDisplayName),
           tailnetIPv4,
           tailnetIPv6: tailnetIPv6 ?? undefined,
+          bridgeTlsEnabled: params.bridgeTls?.enabled ?? false,
+          bridgeTlsFingerprintSha256: params.bridgeTls?.fingerprintSha256,
           tailnetDns,
           sshPort,
           cliPath: resolveBonjourCliPath(),

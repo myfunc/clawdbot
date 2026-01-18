@@ -8,6 +8,7 @@ actor MacNodeRuntime {
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     private var mainSessionKey: String = "main"
+    private var eventSender: (@Sendable (String, String?) async -> Void)?
 
     init(
         makeMainActorServices: @escaping () async -> any MacNodeRuntimeMainActorServices = {
@@ -21,6 +22,10 @@ actor MacNodeRuntime {
         let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         self.mainSessionKey = trimmed
+    }
+
+    func setEventSender(_ sender: (@Sendable (String, String?) async -> Void)?) {
+        self.eventSender = sender
     }
 
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -55,6 +60,8 @@ actor MacNodeRuntime {
                 return try await self.handleScreenRecordInvoke(req)
             case ClawdbotSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
+            case ClawdbotSystemCommand.which.rawValue:
+                return try await self.handleSystemWhich(req)
             case ClawdbotSystemCommand.notify.rawValue:
                 return try await self.handleSystemNotify(req)
             default:
@@ -425,49 +432,170 @@ actor MacNodeRuntime {
         guard !command.isEmpty else {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
+        let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: params.rawCommand)
 
-        let wasAllowlisted = SystemRunAllowlist.contains(command)
-        switch Self.systemRunPolicy() {
-        case .never:
+        let trimmedAgent = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let agentId = trimmedAgent.isEmpty ? nil : trimmedAgent
+        let approvals = ExecApprovalsStore.resolve(agentId: agentId)
+        let security = approvals.agent.security
+        let ask = approvals.agent.ask
+        let askFallback = approvals.agent.askFallback
+        let autoAllowSkills = approvals.agent.autoAllowSkills
+        let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : self.mainSessionKey
+        let runId = UUID().uuidString
+        let env = Self.sanitizedEnv(params.env)
+        let resolution = ExecCommandResolution.resolve(
+            command: command,
+            rawCommand: params.rawCommand,
+            cwd: params.cwd,
+            env: env)
+        let allowlistMatch = security == .allowlist
+            ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
+            : nil
+        let skillAllow: Bool
+        if autoAllowSkills, let name = resolution?.executableName {
+            let bins = await SkillBinsCache.shared.currentBins()
+            skillAllow = bins.contains(name)
+        } else {
+            skillAllow = false
+        }
+
+        if security == .deny {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    host: "node",
+                    command: displayCommand,
+                    reason: "security=deny"))
             return Self.errorResponse(
                 req,
                 code: .unavailable,
-                message: "SYSTEM_RUN_DISABLED: policy=never")
-        case .always:
-            break
-        case .ask:
-            if !wasAllowlisted {
-                let services = await self.mainActorServices()
-                let decision = await services.confirmSystemRun(
-                    command: SystemRunAllowlist.displayString(for: command),
-                    cwd: params.cwd)
-                switch decision {
-                case .allowOnce:
-                    break
-                case .allowAlways:
-                    SystemRunAllowlist.add(command)
-                case .deny:
+                message: "SYSTEM_RUN_DISABLED: security=deny")
+        }
+
+        let requiresAsk: Bool = {
+            if ask == .always { return true }
+            if ask == .onMiss && security == .allowlist && allowlistMatch == nil && !skillAllow { return true }
+            return false
+        }()
+
+        var approvedByAsk = false
+        if requiresAsk {
+            let decision = await ExecApprovalsSocketClient.requestDecision(
+                socketPath: approvals.socketPath,
+                token: approvals.token,
+                request: ExecApprovalPromptRequest(
+                    command: displayCommand,
+                    cwd: params.cwd,
+                    host: "node",
+                    security: security.rawValue,
+                    ask: ask.rawValue,
+                    agentId: agentId,
+                    resolvedPath: resolution?.resolvedPath))
+
+            switch decision {
+            case .deny?:
+                await self.emitExecEvent(
+                    "exec.denied",
+                    payload: ExecEventPayload(
+                        sessionKey: sessionKey,
+                        runId: runId,
+                        host: "node",
+                        command: displayCommand,
+                        reason: "user-denied"))
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "SYSTEM_RUN_DENIED: user denied")
+            case nil:
+                if askFallback == .full {
+                    approvedByAsk = true
+                } else if askFallback == .allowlist {
+                    if allowlistMatch != nil || skillAllow {
+                        approvedByAsk = true
+                    } else {
+                        await self.emitExecEvent(
+                            "exec.denied",
+                            payload: ExecEventPayload(
+                                sessionKey: sessionKey,
+                                runId: runId,
+                                host: "node",
+                                command: displayCommand,
+                                reason: "approval-required"))
+                        return Self.errorResponse(
+                            req,
+                            code: .unavailable,
+                            message: "SYSTEM_RUN_DENIED: approval required")
+                    }
+                } else {
+                    await self.emitExecEvent(
+                        "exec.denied",
+                        payload: ExecEventPayload(
+                            sessionKey: sessionKey,
+                            runId: runId,
+                            host: "node",
+                            command: displayCommand,
+                            reason: "approval-required"))
                     return Self.errorResponse(
                         req,
                         code: .unavailable,
-                        message: "SYSTEM_RUN_DENIED: user denied")
+                        message: "SYSTEM_RUN_DENIED: approval required")
                 }
+            case .allowAlways?:
+                approvedByAsk = true
+                if security == .allowlist {
+                    let pattern = resolution?.resolvedPath ??
+                        resolution?.rawExecutable ??
+                        command.first?.trimmingCharacters(in: .whitespacesAndNewlines) ??
+                        ""
+                    if !pattern.isEmpty {
+                        ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
+                    }
+                }
+            case .allowOnce?:
+                approvedByAsk = true
             }
         }
 
-        var env = params.env
-        if wasAllowlisted, let overrides = env {
-            var merged = ProcessInfo.processInfo.environment
-            for (key, value) in overrides where key != "PATH" {
-                merged[key] = value
-            }
-            env = merged
+        if security == .allowlist && allowlistMatch == nil && !skillAllow && !approvedByAsk {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    host: "node",
+                    command: displayCommand,
+                    reason: "allowlist-miss"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SYSTEM_RUN_DENIED: allowlist miss")
+        }
+
+        if let match = allowlistMatch {
+            ExecApprovalsStore.recordAllowlistUse(
+                agentId: agentId,
+                pattern: match.pattern,
+                command: displayCommand,
+                resolvedPath: resolution?.resolvedPath)
         }
 
         if params.needsScreenRecording == true {
             let authorized = await PermissionManager
                 .status([.screenRecording])[.screenRecording] ?? false
             if !authorized {
+                await self.emitExecEvent(
+                    "exec.denied",
+                    payload: ExecEventPayload(
+                        sessionKey: sessionKey,
+                        runId: runId,
+                        host: "node",
+                        command: displayCommand,
+                        reason: "permission:screenRecording"))
                 return Self.errorResponse(
                     req,
                     code: .unavailable,
@@ -476,11 +604,33 @@ actor MacNodeRuntime {
         }
 
         let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
+        await self.emitExecEvent(
+            "exec.started",
+            payload: ExecEventPayload(
+                sessionKey: sessionKey,
+                runId: runId,
+                host: "node",
+                command: displayCommand))
         let result = await ShellExecutor.runDetailed(
             command: command,
             cwd: params.cwd,
             env: env,
             timeout: timeoutSec)
+        let combined = [result.stdout, result.stderr, result.errorMessage]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        await self.emitExecEvent(
+            "exec.finished",
+            payload: ExecEventPayload(
+                sessionKey: sessionKey,
+                runId: runId,
+                host: "node",
+                command: displayCommand,
+                exitCode: result.exitCode,
+                timedOut: result.timedOut,
+                success: result.success,
+                output: ExecEventPayload.truncateOutput(combined)))
 
         struct RunPayload: Encodable {
             var exitCode: Int?
@@ -499,6 +649,43 @@ actor MacNodeRuntime {
             stderr: result.stderr,
             error: result.errorMessage))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(ClawdbotSystemWhichParams.self, from: req.paramsJSON)
+        let bins = params.bins
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !bins.isEmpty else {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: bins required")
+        }
+
+        let searchPaths = CommandResolver.preferredPaths()
+        var matches: [String] = []
+        var paths: [String: String] = [:]
+        for bin in bins {
+            if let path = CommandResolver.findExecutable(named: bin, searchPaths: searchPaths) {
+                matches.append(bin)
+                paths[bin] = path
+            }
+        }
+
+        struct WhichPayload: Encodable {
+            let bins: [String]
+            let paths: [String: String]
+        }
+        let payload = try Self.encodePayload(WhichPayload(bins: matches, paths: paths))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func emitExecEvent(_ event: String, payload: ExecEventPayload) async {
+        guard let sender = self.eventSender else { return }
+        guard let data = try? JSONEncoder().encode(payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return
+        }
+        await sender(event, json)
     }
 
     private func handleSystemNotify(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -567,8 +754,33 @@ actor MacNodeRuntime {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
     }
 
-    private nonisolated static func systemRunPolicy() -> SystemRunPolicy {
-        SystemRunPolicy.load()
+    private static let blockedEnvKeys: Set<String> = [
+        "PATH",
+        "NODE_OPTIONS",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PERL5LIB",
+        "PERL5OPT",
+        "RUBYOPT",
+    ]
+
+    private static let blockedEnvPrefixes: [String] = [
+        "DYLD_",
+        "LD_",
+    ]
+
+    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
+        guard let overrides else { return nil }
+        var merged = ProcessInfo.processInfo.environment
+        for (rawKey, value) in overrides {
+            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            let upper = key.uppercased()
+            if self.blockedEnvKeys.contains(upper) { continue }
+            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
+            merged[key] = value
+        }
+        return merged
     }
 
     private nonisolated static func locationMode() -> ClawdbotLocationMode {

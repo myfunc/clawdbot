@@ -1,6 +1,6 @@
 import { loadConfig, loadConfigSchema } from "./controllers/config";
 import { loadCronJobs, loadCronStatus } from "./controllers/cron";
-import { loadChannels } from "./controllers/connections";
+import { loadChannels } from "./controllers/channels";
 import { loadDebug } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
 import { loadNodes } from "./controllers/nodes";
@@ -125,12 +125,15 @@ export function setTheme(
 
 export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "overview") await loadOverview(host);
-  if (host.tab === "connections") await loadConnections(host);
+  if (host.tab === "channels") await loadChannelsTab(host);
   if (host.tab === "instances") await loadPresence(host as unknown as ClawdbotApp);
   if (host.tab === "sessions") await loadSessions(host as unknown as ClawdbotApp);
   if (host.tab === "cron") await loadCron(host);
   if (host.tab === "skills") await loadSkills(host as unknown as ClawdbotApp);
-  if (host.tab === "nodes") await loadNodes(host as unknown as ClawdbotApp);
+  if (host.tab === "nodes") {
+    await loadNodes(host as unknown as ClawdbotApp);
+    await loadConfig(host as unknown as ClawdbotApp);
+  }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
     scheduleChatScroll(
@@ -256,9 +259,10 @@ export async function loadOverview(host: SettingsHost) {
   ]);
 }
 
-export async function loadConnections(host: SettingsHost) {
+export async function loadChannelsTab(host: SettingsHost) {
   await Promise.all([
     loadChannels(host as unknown as ClawdbotApp, true),
+    loadConfigSchema(host as unknown as ClawdbotApp),
     loadConfig(host as unknown as ClawdbotApp),
   ]);
 }

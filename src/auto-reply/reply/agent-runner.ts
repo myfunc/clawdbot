@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -8,6 +9,7 @@ import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
@@ -18,10 +20,11 @@ import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
+  createShouldEmitToolOutput,
   createShouldEmitToolResult,
   finalizeWithFollowup,
   isAudioPayload,
@@ -110,6 +113,11 @@ export async function runReplyAgent(params: {
   });
 
   const shouldEmitToolResult = createShouldEmitToolResult({
+    sessionKey,
+    storePath,
+    resolvedVerboseLevel,
+  });
+  const shouldEmitToolOutput = createShouldEmitToolOutput({
     sessionKey,
     storePath,
     resolvedVerboseLevel,
@@ -209,11 +217,23 @@ export async function runReplyAgent(params: {
   });
 
   let responseUsageLine: string | undefined;
-  const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> => {
+  type SessionResetOptions = {
+    failureLabel: string;
+    buildLogMessage: (nextSessionId: string) => string;
+    cleanupTranscripts?: boolean;
+  };
+  const resetSession = async ({
+    failureLabel,
+    buildLogMessage,
+    cleanupTranscripts,
+  }: SessionResetOptions): Promise<boolean> => {
     if (!sessionKey || !activeSessionStore || !storePath) return false;
+    const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
+    if (!prevEntry) return false;
+    const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
     const nextSessionId = crypto.randomUUID();
     const nextEntry: SessionEntry = {
-      ...(activeSessionStore[sessionKey] ?? activeSessionEntry),
+      ...prevEntry,
       sessionId: nextSessionId,
       updatedAt: Date.now(),
       systemSent: false,
@@ -233,18 +253,42 @@ export async function runReplyAgent(params: {
       });
     } catch (err) {
       defaultRuntime.error(
-        `Failed to persist session reset after compaction failure (${sessionKey}): ${String(err)}`,
+        `Failed to persist session reset after ${failureLabel} (${sessionKey}): ${String(err)}`,
       );
     }
     followupRun.run.sessionId = nextSessionId;
     followupRun.run.sessionFile = nextSessionFile;
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
-    defaultRuntime.error(
-      `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
-    );
+    defaultRuntime.error(buildLogMessage(nextSessionId));
+    if (cleanupTranscripts && prevSessionId) {
+      const transcriptCandidates = new Set<string>();
+      const resolved = resolveSessionFilePath(prevSessionId, prevEntry, { agentId });
+      if (resolved) transcriptCandidates.add(resolved);
+      transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
+      for (const candidate of transcriptCandidates) {
+        try {
+          fs.unlinkSync(candidate);
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+    }
     return true;
   };
+  const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "compaction failure",
+      buildLogMessage: (nextSessionId) =>
+        `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
+    });
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "role ordering conflict",
+      buildLogMessage: (nextSessionId) =>
+        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+      cleanupTranscripts: true,
+    });
   try {
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
@@ -258,8 +302,10 @@ export async function runReplyAgent(params: {
       resolvedBlockStreamingBreak,
       applyReplyToMode,
       shouldEmitToolResult,
+      shouldEmitToolOutput,
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
       sessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
@@ -272,7 +318,7 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel } = runOutcome;
+    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -314,6 +360,7 @@ export async function runReplyAgent(params: {
       didLogHeartbeatStrip,
       blockStreamingEnabled,
       blockReplyPipeline,
+      directlySentBlockKeys,
       replyToMode,
       replyToChannel,
       currentMessageId: sessionCtx.MessageSid,
@@ -410,10 +457,11 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const responseUsageEnabled =
-      (activeSessionEntry?.responseUsage ??
-        (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined)) === "on";
-    if (responseUsageEnabled && hasNonzeroUsage(usage)) {
+    const responseUsageRaw =
+      activeSessionEntry?.responseUsage ??
+      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
+    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";
       const costConfig = showCost
@@ -423,16 +471,20 @@ export async function runReplyAgent(params: {
             config: cfg,
           })
         : undefined;
-      const formatted = formatResponseUsageLine({
+      let formatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
       });
+      if (formatted && responseUsageMode === "full" && sessionKey) {
+        formatted = `${formatted} · session ${sessionKey}`;
+      }
       if (formatted) responseUsageLine = formatted;
     }
 
     // If verbose is enabled and this is a new session, prepend a session hint.
     let finalPayloads = replyPayloads;
+    const verboseEnabled = resolvedVerboseLevel !== "off";
     if (autoCompactionCompleted) {
       const count = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -440,12 +492,12 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
       });
-      if (resolvedVerboseLevel === "on") {
+      if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
         finalPayloads = [{ text: `🧹 Auto-compaction complete${suffix}.` }, ...finalPayloads];
       }
     }
-    if (resolvedVerboseLevel === "on" && activeIsNewSession) {
+    if (verboseEnabled && activeIsNewSession) {
       finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
     }
     if (responseUsageLine) {

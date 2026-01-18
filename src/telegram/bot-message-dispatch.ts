@@ -132,7 +132,6 @@ export const dispatchTelegramMessage = async ({
     identityName: resolveIdentityName(cfg, route.agentId),
   };
 
-  let didSendReply = false;
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
@@ -155,7 +154,6 @@ export const dispatchTelegramMessage = async ({
           messageThreadId: resolvedThreadId,
           onVoiceRecording: sendRecordVoice,
         });
-        didSendReply = true;
       },
       deliverToolResult: async (payload) => {
         await toolProgress.append(payload.text || "");
@@ -185,7 +183,7 @@ export const dispatchTelegramMessage = async ({
   });
   draftStream?.stop();
   if (!queuedFinal) {
-    if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+    if (isGroup && historyKey && historyLimit > 0) {
       clearHistoryEntries({ historyMap: groupHistories, historyKey });
     }
     return;
@@ -200,7 +198,7 @@ export const dispatchTelegramMessage = async ({
       });
     });
   }
-  if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+  if (isGroup && historyKey && historyLimit > 0) {
     clearHistoryEntries({ historyMap: groupHistories, historyKey });
   }
 };

@@ -93,7 +93,7 @@ export async function agentCommand(
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
-    throw new Error('Invalid verbose level. Use "on" or "off".');
+    throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
 
   const timeoutSecondsRaw =
@@ -372,6 +372,8 @@ export async function agentCommand(
               images: opts.images,
             });
           }
+          const authProfileId =
+            providerOverride === provider ? sessionEntry?.authProfileOverride : undefined;
           return runEmbeddedPiAgent({
             sessionId,
             sessionKey,
@@ -384,7 +386,10 @@ export async function agentCommand(
             images: opts.images,
             provider: providerOverride,
             model: modelOverride,
-            authProfileId: sessionEntry?.authProfileOverride,
+            authProfileId,
+            authProfileIdSource: authProfileId
+              ? sessionEntry?.authProfileOverrideSource
+              : undefined,
             thinkLevel: resolvedThinkLevel,
             verboseLevel: resolvedVerboseLevel,
             timeoutMs,

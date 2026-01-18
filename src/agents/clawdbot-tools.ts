@@ -9,7 +9,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
-import { createMemoryGetTool, createMemorySearchTool } from "./tools/memory-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -33,6 +32,7 @@ export function createClawdbotTools(options?: {
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
+  pluginToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -41,22 +41,17 @@ export function createClawdbotTools(options?: {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** If true, the model has native vision capability */
+  modelHasVision?: boolean;
 }): AnyAgentTool[] {
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
         sandboxRoot: options?.sandboxRoot,
+        modelHasVision: options?.modelHasVision,
       })
     : null;
-  const memorySearchTool = createMemorySearchTool({
-    config: options?.config,
-    agentSessionKey: options?.agentSessionKey,
-  });
-  const memoryGetTool = createMemoryGetTool({
-    config: options?.config,
-    agentSessionKey: options?.agentSessionKey,
-  });
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
@@ -74,12 +69,19 @@ export function createClawdbotTools(options?: {
       allowedControlPorts: options?.allowedControlPorts,
     }),
     createCanvasTool(),
-    createNodesTool(),
-    createCronTool(),
+    createNodesTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
+    createCronTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
     createMessageTool({
       agentAccountId: options?.agentAccountId,
+      agentSessionKey: options?.agentSessionKey,
       config: options?.config,
       currentChannelId: options?.currentChannelId,
+      currentChannelProvider: options?.agentChannel,
       currentThreadTs: options?.currentThreadTs,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
@@ -105,13 +107,13 @@ export function createClawdbotTools(options?: {
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
       sandboxed: options?.sandboxed,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
-    ...(memorySearchTool && memoryGetTool ? [memorySearchTool, memoryGetTool] : []),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
@@ -132,6 +134,7 @@ export function createClawdbotTools(options?: {
       sandboxed: options?.sandboxed,
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
+    toolAllowlist: options?.pluginToolAllowlist,
   });
 
   return [...tools, ...pluginTools];
