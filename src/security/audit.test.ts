@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { runSecurityAudit } from "./audit.js";
-import { discordPlugin } from "../channels/plugins/discord.js";
-import { slackPlugin } from "../channels/plugins/slack.js";
-import { telegramPlugin } from "../channels/plugins/telegram.js";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { slackPlugin } from "../../extensions/slack/src/channel.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -69,6 +69,56 @@ describe("security audit", () => {
         expect.objectContaining({ checkId: "logging.redact_off", severity: "warn" }),
       ]),
     );
+  });
+
+  it("warns when small models are paired with web/browser tools", async () => {
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+      tools: {
+        web: {
+          search: { enabled: true },
+          fetch: { enabled: true },
+        },
+      },
+      browser: { enabled: true },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find((f) => f.checkId === "models.small_params");
+    expect(finding?.severity).toBe("critical");
+    expect(finding?.detail).toContain("mistral-8b");
+    expect(finding?.detail).toContain("web_search");
+    expect(finding?.detail).toContain("web_fetch");
+    expect(finding?.detail).toContain("browser");
+  });
+
+  it("treats small models as safe when sandbox is on and web tools are disabled", async () => {
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } } },
+      tools: {
+        web: {
+          search: { enabled: false },
+          fetch: { enabled: false },
+        },
+      },
+      browser: { enabled: false },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const finding = res.findings.find((f) => f.checkId === "models.small_params");
+    expect(finding?.severity).toBe("info");
+    expect(finding?.detail).toContain("mistral-8b");
+    expect(finding?.detail).toContain("sandbox=all");
   });
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {

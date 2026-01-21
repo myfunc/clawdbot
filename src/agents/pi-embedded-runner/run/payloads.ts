@@ -23,6 +23,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
+  lastToolError?: { toolName: string; meta?: string; error?: string };
   config?: ClawdbotConfig;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
@@ -153,6 +154,38 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     });
+  }
+
+  if (params.lastToolError) {
+    const hasUserFacingReply = replyItems.length > 0;
+    // Check if this is a recoverable/internal tool error that shouldn't be shown to users
+    // when there's already a user-facing reply (the model should have retried).
+    const errorLower = (params.lastToolError.error ?? "").toLowerCase();
+    const isRecoverableError =
+      errorLower.includes("required") ||
+      errorLower.includes("missing") ||
+      errorLower.includes("invalid") ||
+      errorLower.includes("must be") ||
+      errorLower.includes("must have") ||
+      errorLower.includes("needs") ||
+      errorLower.includes("requires");
+
+    // Show tool errors only when:
+    // 1. There's no user-facing reply AND the error is not recoverable
+    // Recoverable errors (validation, missing params) are already in the model's context
+    // and shouldn't be surfaced to users since the model should retry.
+    if (!hasUserFacingReply && !isRecoverableError) {
+      const toolSummary = formatToolAggregate(
+        params.lastToolError.toolName,
+        params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+        { markdown: useMarkdown },
+      );
+      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      replyItems.push({
+        text: `⚠️ ${toolSummary} failed${errorSuffix}`,
+        isError: true,
+      });
+    }
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);

@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { assertPublicHostname, SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -18,6 +19,7 @@ import {
 } from "./web-shared.js";
 import {
   extractReadableContent,
+  htmlToMarkdown,
   markdownToText,
   truncateText,
   type ExtractMode,
@@ -28,6 +30,8 @@ export { extractReadableContent } from "./web-fetch-utils.js";
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
 const DEFAULT_FETCH_MAX_CHARS = 50_000;
+const DEFAULT_FETCH_MAX_REDIRECTS = 3;
+const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const DEFAULT_FETCH_USER_AGENT =
@@ -142,6 +146,97 @@ function resolveMaxChars(value: unknown, fallback: number): number {
   return Math.max(100, Math.floor(parsed));
 }
 
+function resolveMaxRedirects(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function looksLikeHtml(value: string): boolean {
+  const trimmed = value.trimStart();
+  if (!trimmed) return false;
+  const head = trimmed.slice(0, 256).toLowerCase();
+  return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+async function fetchWithRedirects(params: {
+  url: string;
+  maxRedirects: number;
+  timeoutSeconds: number;
+  userAgent: string;
+}): Promise<{ response: Response; finalUrl: string }> {
+  const signal = withTimeout(undefined, params.timeoutSeconds * 1000);
+  const visited = new Set<string>();
+  let currentUrl = params.url;
+  let redirectCount = 0;
+
+  while (true) {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(currentUrl);
+    } catch {
+      throw new Error("Invalid URL: must be http or https");
+    }
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      throw new Error("Invalid URL: must be http or https");
+    }
+
+    await assertPublicHostname(parsedUrl.hostname);
+
+    const res = await fetch(parsedUrl.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "*/*",
+        "User-Agent": params.userAgent,
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal,
+      redirect: "manual",
+    });
+
+    if (isRedirectStatus(res.status)) {
+      const location = res.headers.get("location");
+      if (!location) {
+        throw new Error(`Redirect missing location header (${res.status})`);
+      }
+      redirectCount += 1;
+      if (redirectCount > params.maxRedirects) {
+        throw new Error(`Too many redirects (limit: ${params.maxRedirects})`);
+      }
+      const nextUrl = new URL(location, parsedUrl).toString();
+      if (visited.has(nextUrl)) {
+        throw new Error("Redirect loop detected");
+      }
+      visited.add(nextUrl);
+      void res.body?.cancel();
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    return { response: res, finalUrl: currentUrl };
+  }
+}
+
+function formatWebFetchErrorDetail(params: {
+  detail: string;
+  contentType?: string | null;
+  maxChars: number;
+}): string {
+  const { detail, contentType, maxChars } = params;
+  if (!detail) return "";
+  let text = detail;
+  const contentTypeLower = contentType?.toLowerCase();
+  if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
+    const rendered = htmlToMarkdown(detail);
+    const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
+    text = markdownToText(withTitle);
+  }
+  const truncated = truncateText(text.trim(), maxChars);
+  return truncated.text;
+}
 export async function fetchFirecrawlContent(params: {
   url: string;
   extractMode: ExtractMode;
@@ -221,6 +316,7 @@ async function runWebFetch(params: {
   url: string;
   extractMode: ExtractMode;
   maxChars: number;
+  maxRedirects: number;
   timeoutSeconds: number;
   cacheTtlMs: number;
   userAgent: string;
@@ -252,20 +348,23 @@ async function runWebFetch(params: {
 
   const start = Date.now();
   let res: Response;
+  let finalUrl = params.url;
   try {
-    res = await fetch(parsedUrl.toString(), {
-      method: "GET",
-      headers: {
-        Accept: "*/*",
-        "User-Agent": params.userAgent,
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    const result = await fetchWithRedirects({
+      url: params.url,
+      maxRedirects: params.maxRedirects,
+      timeoutSeconds: params.timeoutSeconds,
+      userAgent: params.userAgent,
     });
+    res = result.response;
+    finalUrl = result.finalUrl;
   } catch (error) {
+    if (error instanceof SsrFBlockedError) {
+      throw error;
+    }
     if (params.firecrawlEnabled && params.firecrawlApiKey) {
       const firecrawl = await fetchFirecrawlContent({
-        url: params.url,
+        url: finalUrl,
         extractMode: params.extractMode,
         apiKey: params.firecrawlApiKey,
         baseUrl: params.firecrawlBaseUrl,
@@ -278,7 +377,7 @@ async function runWebFetch(params: {
       const truncated = truncateText(firecrawl.text, params.maxChars);
       const payload = {
         url: params.url,
-        finalUrl: firecrawl.finalUrl || params.url,
+        finalUrl: firecrawl.finalUrl || finalUrl,
         status: firecrawl.status ?? 200,
         contentType: "text/markdown",
         title: firecrawl.title,
@@ -313,7 +412,7 @@ async function runWebFetch(params: {
       const truncated = truncateText(firecrawl.text, params.maxChars);
       const payload = {
         url: params.url,
-        finalUrl: firecrawl.finalUrl || params.url,
+        finalUrl: firecrawl.finalUrl || finalUrl,
         status: firecrawl.status ?? res.status,
         contentType: "text/markdown",
         title: firecrawl.title,
@@ -329,7 +428,12 @@ async function runWebFetch(params: {
       writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
       return payload;
     }
-    const detail = await readResponseText(res);
+    const rawDetail = await readResponseText(res);
+    const detail = formatWebFetchErrorDetail({
+      detail: rawDetail,
+      contentType: res.headers.get("content-type"),
+      maxChars: DEFAULT_ERROR_MAX_CHARS,
+    });
     throw new Error(`Web fetch failed (${res.status}): ${detail || res.statusText}`);
   }
 
@@ -343,7 +447,7 @@ async function runWebFetch(params: {
     if (params.readabilityEnabled) {
       const readable = await extractReadableContent({
         html: body,
-        url: res.url || params.url,
+        url: finalUrl,
         extractMode: params.extractMode,
       });
       if (readable?.text) {
@@ -351,7 +455,7 @@ async function runWebFetch(params: {
         title = readable.title;
         extractor = "readability";
       } else {
-        const firecrawl = await tryFirecrawlFallback(params);
+        const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
         if (firecrawl) {
           text = firecrawl.text;
           title = firecrawl.title;
@@ -380,7 +484,7 @@ async function runWebFetch(params: {
   const truncated = truncateText(text, params.maxChars);
   const payload = {
     url: params.url,
-    finalUrl: res.url || params.url,
+    finalUrl,
     status: res.status,
     contentType,
     title,
@@ -477,6 +581,7 @@ export function createWebFetchTool(options?: {
         url,
         extractMode,
         maxChars: resolveMaxChars(maxChars ?? fetch?.maxChars, DEFAULT_FETCH_MAX_CHARS),
+        maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
         timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,

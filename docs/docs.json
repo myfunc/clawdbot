@@ -658,6 +658,10 @@
       "destination": "/reference/templates/AGENTS"
     },
     {
+      "source": "/templates/BOOT",
+      "destination": "/reference/templates/BOOT"
+    },
+    {
       "source": "/templates/BOOTSTRAP",
       "destination": "/reference/templates/BOOTSTRAP"
     },
@@ -789,6 +793,7 @@
           "install/index",
           "install/installer",
           "install/updating",
+          "install/development-channels",
           "install/uninstall",
           "install/ansible",
           "install/nix",
@@ -822,8 +827,10 @@
           "cli/models",
           "cli/logs",
           "cli/nodes",
+          "cli/approvals",
           "cli/gateway",
           "cli/daemon",
+          "cli/service",
           "cli/tui",
           "cli/voicecall",
           "cli/wake",
@@ -1051,6 +1058,7 @@
           "reference/RELEASING",
           "reference/AGENTS.default",
           "reference/templates/AGENTS",
+          "reference/templates/BOOT",
           "reference/templates/BOOTSTRAP",
           "reference/templates/HEARTBEAT",
           "reference/templates/IDENTITY",

@@ -100,6 +100,7 @@ vi.mock("../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveMainSessionKey: mocks.resolveMainSessionKey,
   resolveStorePath: mocks.resolveStorePath,
+  readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../channels/plugins/index.js", () => ({
@@ -243,6 +244,19 @@ vi.mock("../daemon/service.js", () => ({
     }),
   }),
 }));
+vi.mock("../daemon/node-service.js", () => ({
+  resolveNodeService: () => ({
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    isLoaded: async () => true,
+    readRuntime: async () => ({ status: "running", pid: 4321 }),
+    readCommand: async () => ({
+      programArguments: ["node", "dist/entry.js", "node-host"],
+      sourcePath: "/tmp/Library/LaunchAgents/com.clawdbot.node.plist",
+    }),
+  }),
+}));
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
@@ -273,6 +287,8 @@ describe("statusCommand", () => {
     expect(payload.sessions.recent[0].flags).toContain("verbose:on");
     expect(payload.securityAudit.summary.critical).toBe(1);
     expect(payload.securityAudit.summary.warn).toBe(1);
+    expect(payload.gatewayService.label).toBe("LaunchAgent");
+    expect(payload.nodeService.label).toBe("LaunchAgent");
   });
 
   it("prints formatted lines otherwise", async () => {

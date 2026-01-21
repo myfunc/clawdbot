@@ -5,13 +5,6 @@ read_when:
 ---
 # Security 🔒
 
-Running an AI agent with shell access on your machine is... *spicy*. Here’s how to not get pwned.
-
-Clawdbot is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
-- who can talk to your bot
-- where the bot is allowed to act
-- what the bot can touch
-
 ## Quick check: `clawdbot security audit`
 
 Run this regularly (especially after changing config or exposing network surfaces):
@@ -28,6 +21,13 @@ It flags common footguns (Gateway auth exposure, browser control exposure, eleva
 - Tighten `groupPolicy="open"` to `groupPolicy="allowlist"` (and per-account variants) for common channels.
 - Turn `logging.redactSensitive="off"` back to `"tools"`.
 - Tighten local perms (`~/.clawdbot` → `700`, config file → `600`, plus common state files like `credentials/*.json`, `agents/*/agent/auth-profiles.json`, and `agents/*/sessions/sessions.json`).
+
+Running an AI agent with shell access on your machine is... *spicy*. Here’s how to not get pwned.
+
+Clawdbot is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
+- who can talk to your bot
+- where the bot is allowed to act
+- what the bot can touch
 
 ### What the audit checks (high level)
 
@@ -177,6 +177,7 @@ Recommendations:
 - **Use the latest generation, best-tier model** for any bot that can run tools or touch files/networks.
 - **Avoid weaker tiers** (for example, Sonnet or Haiku) for tool-enabled agents or untrusted inboxes.
 - If you must use a smaller model, **reduce blast radius** (read-only tools, strong sandboxing, minimal filesystem access, strict allowlists).
+- When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
 
 ## Reasoning & verbose output in groups
 
@@ -267,6 +268,13 @@ Doctor can generate one for you: `clawdbot doctor --generate-gateway-token`.
 
 Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
 protect local WS access.
+Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
+
+Local device pairing:
+- Device pairing is auto‑approved for **local** connects (loopback or the
+  gateway host’s own tailnet address) to keep same‑host clients smooth.
+- Other tailnet peers are **not** treated as local; they still need pairing
+  approval.
 
 Auth modes:
 - `gateway.auth.mode: "token"`: shared bearer token (recommended for most setups).

@@ -201,8 +201,9 @@ const formatMediaUnderstandingLine = (decisions?: MediaUnderstandingDecision[]) 
       }
       return null;
     })
-    .filter(Boolean);
+    .filter((part): part is string => part != null);
   if (parts.length === 0) return null;
+  if (parts.every((part) => part.endsWith(" none"))) return null;
   return `📎 Media: ${parts.join(" · ")}`;
 };
 
@@ -391,6 +392,7 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink (if enabled)",
     `Options: ${options.join(" | ")}`,
+    "Skills: /skill <name> [input]",
     "More: /commands for all slash commands",
   ].join("\n");
 }

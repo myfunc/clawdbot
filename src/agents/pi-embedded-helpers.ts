@@ -19,13 +19,16 @@ export {
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
   isContextOverflowError,
+  isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isImageDimensionErrorMessage,
   isOverloadedErrorMessage,
   isRawApiErrorPayload,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
+  parseImageDimensionError,
 } from "./pi-embedded-helpers/errors.js";
 export {
   downgradeGeminiHistory,

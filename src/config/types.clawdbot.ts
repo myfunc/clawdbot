@@ -1,11 +1,10 @@
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { AuthConfig } from "./types.auth.js";
-import type { LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
+import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CronConfig } from "./types.cron.js";
 import type {
-  BridgeConfig,
   CanvasHostConfig,
   DiscoveryConfig,
   GatewayConfig,
@@ -24,6 +23,12 @@ import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
 export type ClawdbotConfig = {
+  meta?: {
+    /** Last clawdbot version that wrote this config. */
+    lastTouchedVersion?: string;
+    /** ISO timestamp when this config was last written. */
+    lastTouchedAt?: string;
+  };
   auth?: AuthConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
@@ -48,10 +53,11 @@ export type ClawdbotConfig = {
     lastRunCommand?: string;
     lastRunMode?: "local" | "remote";
   };
+  diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
   update?: {
-    /** Update channel for npm installs ("stable" or "beta"). */
-    channel?: "stable" | "beta";
+    /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
+    channel?: "stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
   };
@@ -75,7 +81,6 @@ export type ClawdbotConfig = {
   channels?: ChannelsConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
-  bridge?: BridgeConfig;
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
@@ -101,5 +106,6 @@ export type ConfigFileSnapshot = {
   config: ClawdbotConfig;
   hash?: string;
   issues: ConfigValidationIssue[];
+  warnings: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];
 };

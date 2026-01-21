@@ -32,14 +32,39 @@ Notes:
 - `gateway`/`node` approvals are controlled by `~/.clawdbot/exec-approvals.json`.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
+- On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
+  from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
 
 ## Config
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 - `tools.exec.host` (default: `sandbox`)
-- `tools.exec.security` (default: `deny`)
+- `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
+- `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs.
+
+Example:
+```json5
+{
+  tools: {
+    exec: {
+      pathPrepend: ["~/bin", "/opt/oss/bin"]
+    }
+  }
+}
+```
+
+### PATH handling
+
+- `host=gateway`: merges your login-shell `PATH` into the exec environment (unless the exec call
+  already sets `env.PATH`). The daemon itself still runs with a minimal `PATH`:
+  - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
+  - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
+- `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.
+  Clawdbot prepends `env.PATH` after profile sourcing; `tools.exec.pathPrepend` applies here too.
+- `host=node`: only env overrides you pass are sent to the node. `tools.exec.pathPrepend` only applies
+  if the exec call already sets `env.PATH`.
 
 Per-agent node binding (use the agent list index in config):
 

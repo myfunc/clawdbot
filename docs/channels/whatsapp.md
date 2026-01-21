@@ -286,6 +286,11 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
     - CLI: `clawdbot message send --media <mp4> --gif-playback`
     - Gateway: `send` params include `gifPlayback: true`
 
+## Voice notes (PTT audio)
+WhatsApp sends audio as **voice notes** (PTT bubble).
+- Best results: OGG/Opus. Clawdbot rewrites `audio/ogg` to `audio/ogg; codecs=opus`.
+- `[[audio_as_voice]]` is ignored for WhatsApp (audio already ships as voice note).
+
 ## Media limits + optimization
 - Default outbound cap: 5 MB (per media item).
 - Override: `agents.defaults.mediaMaxMb`.
@@ -308,7 +313,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 ## Config quick map
 - `channels.whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `channels.whatsapp.selfChatMode` (same-phone setup; bot uses your personal WhatsApp number).
-- `channels.whatsapp.allowFrom` (DM allowlist).
+- `channels.whatsapp.allowFrom` (DM allowlist). WhatsApp uses E.164 phone numbers (no usernames).
 - `channels.whatsapp.mediaMaxMb` (inbound media save cap).
 - `channels.whatsapp.ackReaction` (auto-reaction on message receipt: `{emoji, direct, group}`).
 - `channels.whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).

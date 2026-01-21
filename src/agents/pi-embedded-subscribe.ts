@@ -1,6 +1,6 @@
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -35,6 +35,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetas: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
+    lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on",
@@ -47,6 +48,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastStreamedAssistant: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
+    assistantMessageIndex: 0,
+    lastAssistantTextMessageIndex: -1,
+    lastAssistantTextNormalized: undefined,
+    lastAssistantTextTrimmed: undefined,
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
@@ -83,7 +88,34 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
     state.suppressBlockChunks = false;
+    state.assistantMessageIndex += 1;
+    state.lastAssistantTextMessageIndex = -1;
+    state.lastAssistantTextNormalized = undefined;
+    state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+  };
+
+  const rememberAssistantText = (text: string) => {
+    state.lastAssistantTextMessageIndex = state.assistantMessageIndex;
+    state.lastAssistantTextTrimmed = text.trimEnd();
+    const normalized = normalizeTextForComparison(text);
+    state.lastAssistantTextNormalized = normalized.length > 0 ? normalized : undefined;
+  };
+
+  const shouldSkipAssistantText = (text: string) => {
+    if (state.lastAssistantTextMessageIndex !== state.assistantMessageIndex) return false;
+    const trimmed = text.trimEnd();
+    if (trimmed && trimmed === state.lastAssistantTextTrimmed) return true;
+    const normalized = normalizeTextForComparison(text);
+    if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) return true;
+    return false;
+  };
+
+  const pushAssistantText = (text: string) => {
+    if (!text) return;
+    if (shouldSkipAssistantText(text)) return;
+    assistantTexts.push(text);
+    rememberAssistantText(text);
   };
 
   const finalizeAssistantTexts = (args: {
@@ -102,16 +134,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           assistantTexts.length - state.assistantTextBaseline,
           text,
         );
+        rememberAssistantText(text);
       } else {
-        const last = assistantTexts.at(-1);
-        if (!last || last !== text) assistantTexts.push(text);
+        pushAssistantText(text);
       }
       state.suppressBlockChunks = true;
     } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
       // Non-streaming models (no text_delta): ensure assistantTexts gets the final
       // text when the chunker has nothing buffered to drain.
-      const last = assistantTexts.at(-1);
-      if (!last || last !== text) assistantTexts.push(text);
+      pushAssistantText(text);
     }
 
     state.assistantTextBaseline = assistantTexts.length;
@@ -337,17 +368,30 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
 
+    if (shouldSkipAssistantText(chunk)) return;
+
     state.lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
+    rememberAssistantText(chunk);
     if (!params.onBlockReply) return;
     const splitResult = parseReplyDirectives(chunk);
-    const { text: cleanedText, mediaUrls, audioAsVoice } = splitResult;
+    const {
+      text: cleanedText,
+      mediaUrls,
+      audioAsVoice,
+      replyToId,
+      replyToTag,
+      replyToCurrent,
+    } = splitResult;
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) return;
     void params.onBlockReply({
       text: cleanedText,
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       audioAsVoice,
+      replyToId,
+      replyToTag,
+      replyToCurrent,
     });
   };
 
@@ -380,6 +424,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    state.lastToolError = undefined;
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
@@ -425,6 +470,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
+    getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     waitForCompactionRetry: () => {
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
         ensureCompactionPromise();

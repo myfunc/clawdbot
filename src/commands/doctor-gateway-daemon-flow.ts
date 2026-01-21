@@ -1,13 +1,23 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
-import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveNodeLaunchAgentLabel,
+} from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
+import {
+  isLaunchAgentListed,
+  isLaunchAgentLoaded,
+  launchAgentPlistExists,
+  repairLaunchAgentBootstrap,
+} from "../daemon/launchd.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { note } from "../terminal/note.js";
 import { sleep } from "../utils.js";
 import {
@@ -21,6 +31,50 @@ import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 
+async function maybeRepairLaunchAgentBootstrap(params: {
+  env: Record<string, string | undefined>;
+  title: string;
+  runtime: RuntimeEnv;
+  prompter: DoctorPrompter;
+}): Promise<boolean> {
+  if (process.platform !== "darwin") return false;
+
+  const listed = await isLaunchAgentListed({ env: params.env });
+  if (!listed) return false;
+
+  const loaded = await isLaunchAgentLoaded({ env: params.env });
+  if (loaded) return false;
+
+  const plistExists = await launchAgentPlistExists(params.env);
+  if (!plistExists) return false;
+
+  note("LaunchAgent is listed but not loaded in launchd.", `${params.title} LaunchAgent`);
+
+  const shouldFix = await params.prompter.confirmSkipInNonInteractive({
+    message: `Repair ${params.title} LaunchAgent bootstrap now?`,
+    initialValue: true,
+  });
+  if (!shouldFix) return false;
+
+  params.runtime.log(`Bootstrapping ${params.title} LaunchAgent...`);
+  const repair = await repairLaunchAgentBootstrap({ env: params.env });
+  if (!repair.ok) {
+    params.runtime.error(
+      `${params.title} LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}`,
+    );
+    return false;
+  }
+
+  const verified = await isLaunchAgentLoaded({ env: params.env });
+  if (!verified) {
+    params.runtime.error(`${params.title} LaunchAgent still not loaded after repair.`);
+    return false;
+  }
+
+  note(`${params.title} LaunchAgent repaired.`, `${params.title} LaunchAgent`);
+  return true;
+}
+
 export async function maybeRepairGatewayDaemon(params: {
   cfg: ClawdbotConfig;
   runtime: RuntimeEnv;
@@ -32,10 +86,37 @@ export async function maybeRepairGatewayDaemon(params: {
   if (params.healthOk) return;
 
   const service = resolveGatewayService();
-  const loaded = await service.isLoaded({ env: process.env });
+  // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
+  let loaded = false;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
   let serviceRuntime: Awaited<ReturnType<typeof service.readRuntime>> | undefined;
   if (loaded) {
     serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+  }
+
+  if (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote") {
+    const gatewayRepaired = await maybeRepairLaunchAgentBootstrap({
+      env: process.env,
+      title: "Gateway",
+      runtime: params.runtime,
+      prompter: params.prompter,
+    });
+    await maybeRepairLaunchAgentBootstrap({
+      env: { ...process.env, CLAWDBOT_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel() },
+      title: "Node",
+      runtime: params.runtime,
+      prompter: params.prompter,
+    });
+    if (gatewayRepaired) {
+      loaded = await service.isLoaded({ env: process.env });
+      if (loaded) {
+        serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+      }
+    }
   }
 
   if (params.cfg.gateway?.mode !== "remote") {
@@ -127,7 +208,7 @@ export async function maybeRepairGatewayDaemon(params: {
   if (process.platform === "darwin") {
     const label = resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE);
     note(
-      `LaunchAgent loaded; stopping requires "clawdbot daemon stop" or launchctl bootout gui/$UID/${label}.`,
+      `LaunchAgent loaded; stopping requires "${formatCliCommand("clawdbot daemon stop")}" or launchctl bootout gui/$UID/${label}.`,
       "Gateway",
     );
   }

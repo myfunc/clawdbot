@@ -3,9 +3,15 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../infra/device-identity.js";
+import { buildDeviceAuthPayload } from "../gateway/device-auth.js";
 import { PROTOCOL_VERSION } from "../gateway/protocol/index.js";
 import { rawDataToString } from "../infra/ws.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -58,6 +64,23 @@ async function onceMessage<T = unknown>(
 async function connectReq(params: { url: string; token?: string }) {
   const ws = new WebSocket(params.url);
   await new Promise<void>((resolve) => ws.once("open", resolve));
+  const identity = loadOrCreateDeviceIdentity();
+  const signedAtMs = Date.now();
+  const payload = buildDeviceAuthPayload({
+    deviceId: identity.deviceId,
+    clientId: GATEWAY_CLIENT_NAMES.TEST,
+    clientMode: GATEWAY_CLIENT_MODES.TEST,
+    role: "operator",
+    scopes: [],
+    signedAtMs,
+    token: params.token ?? null,
+  });
+  const device = {
+    id: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    signature: signDevicePayload(identity.privateKeyPem, payload),
+    signedAt: signedAtMs,
+  };
   ws.send(
     JSON.stringify({
       type: "req",
@@ -75,6 +98,7 @@ async function connectReq(params: { url: string; token?: string }) {
         },
         caps: [],
         auth: params.token ? { token: params.token } : undefined,
+        device,
       },
     }),
   );
@@ -114,6 +138,7 @@ describe("onboard (non-interactive): gateway auth", () => {
     process.env.HOME = tempHome;
     delete process.env.CLAWDBOT_STATE_DIR;
     delete process.env.CLAWDBOT_CONFIG_PATH;
+    vi.resetModules();
 
     const token = "tok_test_123";
     const workspace = path.join(tempHome, "clawd");

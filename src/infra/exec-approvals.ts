@@ -36,6 +36,14 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
+export type ExecApprovalsSnapshot = {
+  path: string;
+  exists: boolean;
+  raw: string | null;
+  file: ExecApprovalsFile;
+  hash: string;
+};
+
 export type ExecApprovalsResolved = {
   path: string;
   socketPath: string;
@@ -52,6 +60,13 @@ const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.clawdbot/exec-approvals.sock";
 const DEFAULT_FILE = "~/.clawdbot/exec-approvals.json";
+
+function hashExecApprovalsRaw(raw: string | null): string {
+  return crypto
+    .createHash("sha256")
+    .update(raw ?? "")
+    .digest("hex");
+}
 
 function expandHome(value: string): string {
   if (!value) return value;
@@ -73,7 +88,7 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
+export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
   const normalized: ExecApprovalsFile = {
@@ -95,6 +110,38 @@ function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
 
 function generateToken(): string {
   return crypto.randomBytes(24).toString("base64url");
+}
+
+export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
+  const filePath = resolveExecApprovalsPath();
+  if (!fs.existsSync(filePath)) {
+    const file = normalizeExecApprovals({ version: 1, agents: {} });
+    return {
+      path: filePath,
+      exists: false,
+      raw: null,
+      file,
+      hash: hashExecApprovalsRaw(null),
+    };
+  }
+  const raw = fs.readFileSync(filePath, "utf8");
+  let parsed: ExecApprovalsFile | null = null;
+  try {
+    parsed = JSON.parse(raw) as ExecApprovalsFile;
+  } catch {
+    parsed = null;
+  }
+  const file =
+    parsed?.version === 1
+      ? normalizeExecApprovals(parsed)
+      : normalizeExecApprovals({ version: 1, agents: {} });
+  return {
+    path: filePath,
+    exists: true,
+    raw,
+    file,
+    hash: hashExecApprovalsRaw(raw),
+  };
 }
 
 export function loadExecApprovals(): ExecApprovalsFile {
@@ -141,31 +188,54 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   return updated;
 }
 
-function normalizeSecurity(value?: ExecSecurity): ExecSecurity {
+function normalizeSecurity(value: ExecSecurity | undefined, fallback: ExecSecurity): ExecSecurity {
   if (value === "allowlist" || value === "full" || value === "deny") return value;
-  return DEFAULT_SECURITY;
+  return fallback;
 }
 
-function normalizeAsk(value?: ExecAsk): ExecAsk {
+function normalizeAsk(value: ExecAsk | undefined, fallback: ExecAsk): ExecAsk {
   if (value === "always" || value === "off" || value === "on-miss") return value;
-  return DEFAULT_ASK;
+  return fallback;
 }
 
-export function resolveExecApprovals(agentId?: string): ExecApprovalsResolved {
+export type ExecApprovalsDefaultOverrides = {
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  askFallback?: ExecSecurity;
+  autoAllowSkills?: boolean;
+};
+
+export function resolveExecApprovals(
+  agentId?: string,
+  overrides?: ExecApprovalsDefaultOverrides,
+): ExecApprovalsResolved {
   const file = ensureExecApprovals();
   const defaults = file.defaults ?? {};
   const agentKey = agentId ?? "default";
   const agent = file.agents?.[agentKey] ?? {};
+  const fallbackSecurity = overrides?.security ?? DEFAULT_SECURITY;
+  const fallbackAsk = overrides?.ask ?? DEFAULT_ASK;
+  const fallbackAskFallback = overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
+  const fallbackAutoAllowSkills = overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
-    security: normalizeSecurity(defaults.security),
-    ask: normalizeAsk(defaults.ask),
-    askFallback: normalizeSecurity(defaults.askFallback ?? DEFAULT_ASK_FALLBACK),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS),
+    security: normalizeSecurity(defaults.security, fallbackSecurity),
+    ask: normalizeAsk(defaults.ask, fallbackAsk),
+    askFallback: normalizeSecurity(
+      defaults.askFallback ?? fallbackAskFallback,
+      fallbackAskFallback,
+    ),
+    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
   };
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
-    security: normalizeSecurity(agent.security ?? resolvedDefaults.security),
-    ask: normalizeAsk(agent.ask ?? resolvedDefaults.ask),
-    askFallback: normalizeSecurity(agent.askFallback ?? resolvedDefaults.askFallback),
+    security: normalizeSecurity(
+      agent.security ?? resolvedDefaults.security,
+      resolvedDefaults.security,
+    ),
+    ask: normalizeAsk(agent.ask ?? resolvedDefaults.ask, resolvedDefaults.ask),
+    askFallback: normalizeSecurity(
+      agent.askFallback ?? resolvedDefaults.askFallback,
+      resolvedDefaults.askFallback,
+    ),
     autoAllowSkills: Boolean(agent.autoAllowSkills ?? resolvedDefaults.autoAllowSkills),
   };
   const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
@@ -195,7 +265,7 @@ function parseFirstToken(command: string): string | null {
     if (end > 1) return trimmed.slice(1, end);
     return trimmed.slice(1);
   }
-  const match = /^[^\\s]+/.exec(trimmed);
+  const match = /^[^\s]+/.exec(trimmed);
   return match ? match[0] : null;
 }
 

@@ -1,9 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../../config/config.js";
 
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
 
 describe("resolveOutboundTarget", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]),
+    );
+  });
+
   it("falls back to whatsapp allowFrom via config", () => {
     const cfg: ClawdbotConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
@@ -111,10 +124,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "whatsapp",
       to: "+1555",
       accountId: "acct-1",
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: "acct-1",
+      lastThreadId: undefined,
     });
   });
 
@@ -133,10 +148,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "telegram",
       to: undefined,
       accountId: undefined,
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: undefined,
+      lastThreadId: undefined,
     });
   });
 
@@ -156,10 +173,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "telegram",
       to: "+1555",
       accountId: undefined,
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: undefined,
+      lastThreadId: undefined,
     });
   });
 
@@ -179,10 +198,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "slack",
       to: undefined,
       accountId: undefined,
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: undefined,
+      lastThreadId: undefined,
     });
   });
 });

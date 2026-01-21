@@ -20,8 +20,12 @@ function buildSkillsSection(params: {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed || params.isMinimal) return [];
   return [
-    "## Skills",
-    `Skills provide task-specific instructions. Use \`${params.readToolName}\` to load the SKILL.md at the location listed for that skill.`,
+    "## Skills (mandatory)",
+    "Before replying: scan <available_skills> <description> entries.",
+    `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
+    "- If multiple could apply: choose the most specific one, then read/follow it.",
+    "- If none clearly apply: do not read any SKILL.md.",
+    "Constraints: never read more than one skill up front; only read after selecting.",
     trimmed,
     "",
   ];
@@ -109,6 +113,22 @@ function buildMessagingSection(params: {
   ];
 }
 
+function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
+  const docsPath = params.docsPath?.trim();
+  if (!docsPath || params.isMinimal) return [];
+  return [
+    "## Documentation",
+    `Clawdbot docs: ${docsPath}`,
+    "Mirror: https://docs.clawd.bot",
+    "Source: https://github.com/clawdbot/clawdbot",
+    "Community: https://discord.com/invite/clawd",
+    "Find new skills: https://clawdhub.com",
+    "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
+    "When diagnosing issues, run `clawdbot status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    "",
+  ];
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -125,14 +145,17 @@ export function buildAgentSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
+  docsPath?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
   runtimeInfo?: {
+    agentId?: string;
     host?: string;
     os?: string;
     arch?: string;
     node?: string;
     model?: string;
+    defaultModel?: string;
     channel?: string;
     capabilities?: string[];
   };
@@ -295,6 +318,11 @@ export function buildAgentSystemPrompt(params: {
     readToolName,
   });
   const memorySection = buildMemorySection({ isMinimal, availableTools });
+  const docsSection = buildDocsSection({
+    docsPath: params.docsPath,
+    isMinimal,
+    readToolName,
+  });
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -332,6 +360,7 @@ export function buildAgentSystemPrompt(params: {
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",
     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
+    "Use plain human language for narration unless in a technical context.",
     "",
     "## Clawdbot CLI Quick Reference",
     "Clawdbot is controlled via subcommands. Do not invent commands.",
@@ -371,6 +400,7 @@ export function buildAgentSystemPrompt(params: {
     `Your working directory is: ${params.workspaceDir}`,
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
     "",
+    ...docsSection,
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
       ? [
@@ -520,25 +550,44 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    `Runtime: ${[
-      runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
-      runtimeInfo?.os
-        ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
-        : runtimeInfo?.arch
-          ? `arch=${runtimeInfo.arch}`
-          : "",
-      runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
-      runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-      runtimeChannel ? `channel=${runtimeChannel}` : "",
-      runtimeChannel
-        ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
-        : "",
-      `thinking=${params.defaultThinkLevel ?? "off"}`,
-    ]
-      .filter(Boolean)
-      .join(" | ")}`,
+    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
   return lines.filter(Boolean).join("\n");
+}
+
+export function buildRuntimeLine(
+  runtimeInfo?: {
+    agentId?: string;
+    host?: string;
+    os?: string;
+    arch?: string;
+    node?: string;
+    model?: string;
+    defaultModel?: string;
+  },
+  runtimeChannel?: string,
+  runtimeCapabilities: string[] = [],
+  defaultThinkLevel?: ThinkLevel,
+): string {
+  return `Runtime: ${[
+    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
+    runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
+    runtimeInfo?.os
+      ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
+      : runtimeInfo?.arch
+        ? `arch=${runtimeInfo.arch}`
+        : "",
+    runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
+    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
+    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
+    runtimeChannel ? `channel=${runtimeChannel}` : "",
+    runtimeChannel
+      ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
+      : "",
+    `thinking=${defaultThinkLevel ?? "off"}`,
+  ]
+    .filter(Boolean)
+    .join(" | ")}`;
 }

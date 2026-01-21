@@ -11,7 +11,11 @@ import {
 } from "../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { formatInboundEnvelope, formatInboundFromLabel } from "../../auto-reply/envelope.js";
+import {
+  formatInboundEnvelope,
+  formatInboundFromLabel,
+  resolveEnvelopeFormatOptions,
+} from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -33,6 +37,7 @@ import {
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import {
+  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
   updateLastRoute,
@@ -85,6 +90,29 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   } catch {
     return undefined;
   }
+}
+
+type IMessageReplyContext = {
+  id?: string;
+  body: string;
+  sender?: string;
+};
+
+function normalizeReplyField(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number") return String(value);
+  return undefined;
+}
+
+function describeReplyContext(message: IMessagePayload): IMessageReplyContext | null {
+  const body = normalizeReplyField(message.reply_to_text);
+  if (!body) return null;
+  const id = normalizeReplyField(message.reply_to_id);
+  const sender = normalizeReplyField(message.reply_to_sender);
+  return { body, id, sender };
 }
 
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
@@ -319,6 +347,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
     const bodyText = messageText || placeholder;
     if (!bodyText) return;
+    const replyContext = describeReplyContext(message);
     const createdAt = message.created_at ? Date.parse(message.created_at) : undefined;
     const historyKey = isGroup
       ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
@@ -401,13 +430,28 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       directLabel: senderNormalized,
       directId: sender,
     });
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+    const previousTimestamp = readSessionUpdatedAt({
+      storePath,
+      sessionKey: route.sessionKey,
+    });
+    const replySuffix = replyContext
+      ? `\n\n[Replying to ${replyContext.sender ?? "unknown sender"}${
+          replyContext.id ? ` id:${replyContext.id}` : ""
+        }]\n${replyContext.body}\n[/Replying]`
+      : "";
     const body = formatInboundEnvelope({
       channel: "iMessage",
       from: fromLabel,
       timestamp: createdAt,
-      body: bodyText,
+      body: `${bodyText}${replySuffix}`,
       chatType: isGroup ? "group" : "direct",
       sender: { name: senderNormalized, id: sender },
+      previousTimestamp,
+      envelope: envelopeOptions,
     });
     let combinedBody = body;
     if (isGroup && historyKey && historyLimit > 0) {
@@ -424,6 +468,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             body: `${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
             chatType: "group",
             senderLabel: entry.sender,
+            envelope: envelopeOptions,
           }),
       });
     }
@@ -446,6 +491,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       Provider: "imessage",
       Surface: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
+      ReplyToId: replyContext?.id,
+      ReplyToBody: replyContext?.body,
+      ReplyToSender: replyContext?.sender,
       Timestamp: createdAt,
       MediaPath: mediaPath,
       MediaType: mediaType,
@@ -461,9 +509,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       OriginatingTo: imessageTo,
     });
 
-    const storePath = resolveStorePath(cfg.session?.store, {
-      agentId: route.agentId,
-    });
     void recordSessionMetaFromInbound({
       storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,

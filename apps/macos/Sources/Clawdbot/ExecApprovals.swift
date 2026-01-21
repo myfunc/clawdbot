@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OSLog
 import Security
@@ -52,11 +53,11 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     static func from(security: ExecSecurity, ask: ExecAsk) -> ExecApprovalQuickMode {
         switch security {
         case .deny:
-            return .deny
+            .deny
         case .full:
-            return .allow
+            .allow
         case .allowlist:
-            return .ask
+            .ask
         }
     }
 }
@@ -85,9 +86,9 @@ enum ExecApprovalDecision: String, Codable, Sendable {
 
 struct ExecAllowlistEntry: Codable, Hashable {
     var pattern: String
-    var lastUsedAt: Double? = nil
-    var lastUsedCommand: String? = nil
-    var lastResolvedPath: String? = nil
+    var lastUsedAt: Double?
+    var lastUsedCommand: String?
+    var lastResolvedPath: String?
 }
 
 struct ExecApprovalsDefaults: Codable {
@@ -105,7 +106,8 @@ struct ExecApprovalsAgent: Codable {
     var allowlist: [ExecAllowlistEntry]?
 
     var isEmpty: Bool {
-        security == nil && ask == nil && askFallback == nil && autoAllowSkills == nil && (allowlist?.isEmpty ?? true)
+        self.security == nil && self.ask == nil && self.askFallback == nil && self
+            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true)
     }
 }
 
@@ -119,6 +121,13 @@ struct ExecApprovalsFile: Codable {
     var socket: ExecApprovalsSocketConfig?
     var defaults: ExecApprovalsDefaults?
     var agents: [String: ExecApprovalsAgent]?
+}
+
+struct ExecApprovalsSnapshot: Codable {
+    var path: String
+    var exists: Bool
+    var hash: String
+    var file: ExecApprovalsFile
 }
 
 struct ExecApprovalsResolved {
@@ -153,9 +162,61 @@ enum ExecApprovalsStore {
         ClawdbotPaths.stateDirURL.appendingPathComponent("exec-approvals.sock").path
     }
 
+    static func normalizeIncoming(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
+        let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return ExecApprovalsFile(
+            version: 1,
+            socket: ExecApprovalsSocketConfig(
+                path: socketPath.isEmpty ? nil : socketPath,
+                token: token.isEmpty ? nil : token),
+            defaults: file.defaults,
+            agents: file.agents)
+    }
+
+    static func readSnapshot() -> ExecApprovalsSnapshot {
+        let url = self.fileURL()
+        guard FileManager().fileExists(atPath: url.path) else {
+            return ExecApprovalsSnapshot(
+                path: url.path,
+                exists: false,
+                hash: self.hashRaw(nil),
+                file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+        }
+        let raw = try? String(contentsOf: url, encoding: .utf8)
+        let data = raw.flatMap { $0.data(using: .utf8) }
+        let decoded: ExecApprovalsFile = {
+            if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data), file.version == 1 {
+                return file
+            }
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        }()
+        return ExecApprovalsSnapshot(
+            path: url.path,
+            exists: true,
+            hash: self.hashRaw(raw),
+            file: decoded)
+    }
+
+    static func redactForSnapshot(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
+        let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if socketPath.isEmpty {
+            return ExecApprovalsFile(
+                version: file.version,
+                socket: nil,
+                defaults: file.defaults,
+                agents: file.agents)
+        }
+        return ExecApprovalsFile(
+            version: file.version,
+            socket: ExecApprovalsSocketConfig(path: socketPath, token: nil),
+            defaults: file.defaults,
+            agents: file.agents)
+    }
+
     static func loadFile() -> ExecApprovalsFile {
         let url = self.fileURL()
-        guard FileManager.default.fileExists(atPath: url.path) else {
+        guard FileManager().fileExists(atPath: url.path) else {
             return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
         }
         do {
@@ -177,11 +238,11 @@ enum ExecApprovalsStore {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(file)
             let url = self.fileURL()
-            try FileManager.default.createDirectory(
+            try FileManager().createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic])
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
             self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -372,14 +433,20 @@ enum ExecApprovalsStore {
         return UUID().uuidString
     }
 
+    private static func hashRaw(_ raw: String?) -> String {
+        let data = Data((raw ?? "").utf8)
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func expandPath(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == "~" {
-            return FileManager.default.homeDirectoryForCurrentUser.path
+            return FileManager().homeDirectoryForCurrentUser.path
         }
         if trimmed.hasPrefix("~/") {
             let suffix = trimmed.dropFirst(2)
-            return FileManager.default.homeDirectoryForCurrentUser
+            return FileManager().homeDirectoryForCurrentUser
                 .appendingPathComponent(String(suffix)).path
         }
         return trimmed
@@ -401,8 +468,8 @@ struct ExecCommandResolution: Sendable {
         command: [String],
         rawCommand: String?,
         cwd: String?,
-        env: [String: String]?
-    ) -> ExecCommandResolution? {
+        env: [String: String]?) -> ExecCommandResolution?
+    {
         let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedRaw.isEmpty, let token = self.parseFirstToken(trimmedRaw) {
             return self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
@@ -420,8 +487,8 @@ struct ExecCommandResolution: Sendable {
     private static func resolveExecutable(
         rawExecutable: String,
         cwd: String?,
-        env: [String: String]?
-    ) -> ExecCommandResolution? {
+        env: [String: String]?) -> ExecCommandResolution?
+    {
         let expanded = rawExecutable.hasPrefix("~") ? (rawExecutable as NSString).expandingTildeInPath : rawExecutable
         let hasPathSeparator = expanded.contains("/") || expanded.contains("\\")
         let resolvedPath: String? = {
@@ -430,14 +497,18 @@ struct ExecCommandResolution: Sendable {
                     return expanded
                 }
                 let base = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let root = (base?.isEmpty == false) ? base! : FileManager.default.currentDirectoryPath
+                let root = (base?.isEmpty == false) ? base! : FileManager().currentDirectoryPath
                 return URL(fileURLWithPath: root).appendingPathComponent(expanded).path
             }
             let searchPaths = self.searchPaths(from: env)
             return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
         }()
         let name = resolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
-        return ExecCommandResolution(rawExecutable: expanded, resolvedPath: resolvedPath, executableName: name, cwd: cwd)
+        return ExecCommandResolution(
+            rawExecutable: expanded,
+            resolvedPath: resolvedPath,
+            executableName: name,
+            cwd: cwd)
     }
 
     private static func parseFirstToken(_ command: String) -> String? {
@@ -558,7 +629,7 @@ struct ExecEventPayload: Codable, Sendable {
     var output: String?
     var reason: String?
 
-    static func truncateOutput(_ raw: String, maxChars: Int = 20_000) -> String? {
+    static func truncateOutput(_ raw: String, maxChars: Int = 20000) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if trimmed.count <= maxChars { return trimmed }

@@ -3,11 +3,13 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import {
   type HeartbeatSummary,
   resolveHeartbeatSummaryForAgent,
@@ -71,7 +73,7 @@ export type HealthSummary = {
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 const debugHealth = (...args: unknown[]) => {
-  if (process.env.CLAWDBOT_DEBUG_HEALTH === "1") {
+  if (isTruthyEnvValue(process.env.CLAWDBOT_DEBUG_HEALTH)) {
     console.warn("[health:debug]", ...args);
   }
 };
@@ -500,9 +502,10 @@ export async function getHealthSnapshot(params?: {
 }
 
 export async function healthCommand(
-  opts: { json?: boolean; timeoutMs?: number; verbose?: boolean },
+  opts: { json?: boolean; timeoutMs?: number; verbose?: boolean; config?: ClawdbotConfig },
   runtime: RuntimeEnv,
 ) {
+  const cfg = opts.config ?? loadConfig();
   // Always query the running gateway; do not open a direct Baileys socket here.
   const summary = await withProgress(
     {
@@ -515,6 +518,7 @@ export async function healthCommand(
         method: "health",
         params: opts.verbose ? { probe: true } : undefined,
         timeoutMs: opts.timeoutMs,
+        config: cfg,
       }),
   );
   // Gateway reachability defines success; channel issues are reported but not fatal here.
@@ -523,15 +527,14 @@ export async function healthCommand(
   if (opts.json) {
     runtime.log(JSON.stringify(summary, null, 2));
   } else {
-    const debugEnabled = process.env.CLAWDBOT_DEBUG_HEALTH === "1";
+    const debugEnabled = isTruthyEnvValue(process.env.CLAWDBOT_DEBUG_HEALTH);
     if (opts.verbose) {
-      const details = buildGatewayConnectionDetails();
+      const details = buildGatewayConnectionDetails({ config: cfg });
       runtime.log(info("Gateway connection:"));
       for (const line of details.message.split("\n")) {
         runtime.log(`  ${line}`);
       }
     }
-    const cfg = loadConfig();
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];

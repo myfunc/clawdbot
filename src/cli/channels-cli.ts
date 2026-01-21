@@ -14,6 +14,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 
 const optionNamesAdd = [
@@ -33,6 +34,7 @@ const optionNamesAdd = [
   "httpUrl",
   "httpHost",
   "httpPort",
+  "webhookPath",
   "useEnv",
   "homeserver",
   "userId",
@@ -43,6 +45,17 @@ const optionNamesAdd = [
 ] as const;
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
+
+function runChannelsCommand(action: () => Promise<void>) {
+  return runCommandWithRuntime(defaultRuntime, action);
+}
+
+function runChannelsCommandWithDanger(action: () => Promise<void>, label: string) {
+  return runCommandWithRuntime(defaultRuntime, action, (err) => {
+    defaultRuntime.error(danger(`${label}: ${String(err)}`));
+    defaultRuntime.exit(1);
+  });
+}
 
 export function registerChannelsCli(program: Command) {
   const channelNames = listChannelPlugins()
@@ -66,12 +79,9 @@ export function registerChannelsCli(program: Command) {
     .option("--no-usage", "Skip model provider usage/quota snapshots")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      try {
+      await runChannelsCommand(async () => {
         await channelsListCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   channels
@@ -81,12 +91,9 @@ export function registerChannelsCli(program: Command) {
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      try {
+      await runChannelsCommand(async () => {
         await channelsStatusCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   channels
@@ -98,12 +105,9 @@ export function registerChannelsCli(program: Command) {
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      try {
+      await runChannelsCommand(async () => {
         await channelsCapabilitiesCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   channels
@@ -115,7 +119,7 @@ export function registerChannelsCli(program: Command) {
     .option("--kind <kind>", "Target kind (auto|user|group)", "auto")
     .option("--json", "Output JSON", false)
     .action(async (entries, opts) => {
-      try {
+      await runChannelsCommand(async () => {
         await channelsResolveCommand(
           {
             channel: opts.channel as string | undefined,
@@ -126,10 +130,7 @@ export function registerChannelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   channels
@@ -139,12 +140,9 @@ export function registerChannelsCli(program: Command) {
     .option("--lines <n>", "Number of lines (default: 200)", "200")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      try {
+      await runChannelsCommand(async () => {
         await channelsLogsCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   channels
@@ -166,6 +164,7 @@ export function registerChannelsCli(program: Command) {
     .option("--http-url <url>", "Signal HTTP daemon base URL")
     .option("--http-host <host>", "Signal HTTP host")
     .option("--http-port <port>", "Signal HTTP port")
+    .option("--webhook-path <path>", "BlueBubbles webhook path")
     .option("--homeserver <url>", "Matrix homeserver URL")
     .option("--user-id <id>", "Matrix user ID")
     .option("--access-token <token>", "Matrix access token")
@@ -174,13 +173,10 @@ export function registerChannelsCli(program: Command) {
     .option("--initial-sync-limit <n>", "Matrix initial sync limit")
     .option("--use-env", "Use env token (default account only)", false)
     .action(async (opts, command) => {
-      try {
+      await runChannelsCommand(async () => {
         const hasFlags = hasExplicitOptions(command, optionNamesAdd);
         await channelsAddCommand(opts, defaultRuntime, { hasFlags });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   channels
@@ -190,13 +186,10 @@ export function registerChannelsCli(program: Command) {
     .option("--account <id>", "Account id (default when omitted)")
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
-      try {
+      await runChannelsCommand(async () => {
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(opts, defaultRuntime, { hasFlags });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   channels
@@ -206,7 +199,7 @@ export function registerChannelsCli(program: Command) {
     .option("--account <id>", "Account id (accountId)")
     .option("--verbose", "Verbose connection logs", false)
     .action(async (opts) => {
-      try {
+      await runChannelsCommandWithDanger(async () => {
         await runChannelLogin(
           {
             channel: opts.channel as string | undefined,
@@ -215,10 +208,7 @@ export function registerChannelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(danger(`Channel login failed: ${String(err)}`));
-        defaultRuntime.exit(1);
-      }
+      }, "Channel login failed");
     });
 
   channels
@@ -227,7 +217,7 @@ export function registerChannelsCli(program: Command) {
     .option("--channel <channel>", "Channel alias (default: whatsapp)")
     .option("--account <id>", "Account id (accountId)")
     .action(async (opts) => {
-      try {
+      await runChannelsCommandWithDanger(async () => {
         await runChannelLogout(
           {
             channel: opts.channel as string | undefined,
@@ -235,9 +225,6 @@ export function registerChannelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(danger(`Channel logout failed: ${String(err)}`));
-        defaultRuntime.exit(1);
-      }
+      }, "Channel logout failed");
     });
 }

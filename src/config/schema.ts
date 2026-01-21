@@ -47,6 +47,7 @@ export type ChannelUiMetadata = {
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
   update: "Update",
+  diagnostics: "Diagnostics",
   logging: "Logging",
   gateway: "Gateway",
   agents: "Agents",
@@ -73,6 +74,7 @@ const GROUP_LABELS: Record<string, string> = {
 const GROUP_ORDER: Record<string, number> = {
   wizard: 20,
   update: 25,
+  diagnostics: 27,
   gateway: 30,
   agents: 40,
   tools: 50,
@@ -97,13 +99,27 @@ const GROUP_ORDER: Record<string, number> = {
 };
 
 const FIELD_LABELS: Record<string, string> = {
+  "meta.lastTouchedVersion": "Config Last Touched Version",
+  "meta.lastTouchedAt": "Config Last Touched At",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
+  "diagnostics.enabled": "Diagnostics Enabled",
+  "diagnostics.otel.enabled": "OpenTelemetry Enabled",
+  "diagnostics.otel.endpoint": "OpenTelemetry Endpoint",
+  "diagnostics.otel.protocol": "OpenTelemetry Protocol",
+  "diagnostics.otel.headers": "OpenTelemetry Headers",
+  "diagnostics.otel.serviceName": "OpenTelemetry Service Name",
+  "diagnostics.otel.traces": "OpenTelemetry Traces Enabled",
+  "diagnostics.otel.metrics": "OpenTelemetry Metrics Enabled",
+  "diagnostics.otel.logs": "OpenTelemetry Logs Enabled",
+  "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
+  "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
   "gateway.remote.token": "Remote Gateway Token",
   "gateway.remote.password": "Remote Gateway Password",
+  "gateway.remote.tlsFingerprint": "Remote Gateway TLS Fingerprint",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
   "tools.media.image.enabled": "Enable Image Understanding",
@@ -144,6 +160,7 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.exec.security": "Exec Security",
   "tools.exec.ask": "Exec Ask",
   "tools.exec.node": "Exec Node Binding",
+  "tools.exec.pathPrepend": "Exec PATH Prepend",
   "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
@@ -161,15 +178,21 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.timeoutSeconds": "Web Fetch Timeout (sec)",
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
+  "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
+  "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
+  "gateway.nodes.denyCommands": "Gateway Node Denylist",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
+  "agents.defaults.envelopeTimezone": "Envelope Timezone",
+  "agents.defaults.envelopeTimestamp": "Envelope Timestamp",
+  "agents.defaults.envelopeElapsed": "Envelope Elapsed",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
@@ -227,6 +250,8 @@ const FIELD_LABELS: Record<string, string> = {
   "commands.useAccessGroups": "Use Access Groups",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
+  "browser.snapshotDefaults": "Browser Snapshot Defaults",
+  "browser.snapshotDefaults.mode": "Browser Snapshot Mode",
   "browser.remoteCdpTimeoutMs": "Remote CDP Timeout (ms)",
   "browser.remoteCdpHandshakeTimeoutMs": "Remote CDP Handshake Timeout (ms)",
   "session.dmScope": "DM Session Scope",
@@ -242,6 +267,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.slack": "Slack",
   "channels.signal": "Signal",
   "channels.imessage": "iMessage",
+  "channels.bluebubbles": "BlueBubbles",
   "channels.msteams": "MS Teams",
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",
@@ -260,6 +286,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.whatsapp.debounceMs": "WhatsApp Message Debounce (ms)",
   "channels.signal.dmPolicy": "Signal DM Policy",
   "channels.imessage.dmPolicy": "iMessage DM Policy",
+  "channels.bluebubbles.dmPolicy": "BlueBubbles DM Policy",
   "channels.discord.dm.policy": "Discord DM Policy",
   "channels.discord.retry.attempts": "Discord Retry Attempts",
   "channels.discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
@@ -296,9 +323,13 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const FIELD_HELP: Record<string, string> = {
-  "update.channel": 'Update channel for npm installs ("stable" or "beta").',
+  "meta.lastTouchedVersion": "Auto-set when Clawdbot writes the config.",
+  "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
+  "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
+  "gateway.remote.tlsFingerprint":
+    "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
@@ -310,12 +341,17 @@ const FIELD_HELP: Record<string, string> = {
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode": 'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
+  "gateway.nodes.allowCommands":
+    "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
+  "gateway.nodes.denyCommands":
+    "Commands to block even if present in node claims or default allowlist.",
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
+  "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
@@ -329,16 +365,23 @@ const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires Brave API key).",
-  "tools.web.search.provider": 'Search provider (only "brave" supported today).',
+  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
+  "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.perplexity.apiKey":
+    "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var).",
+  "tools.web.search.perplexity.baseUrl":
+    "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
+  "tools.web.search.perplexity.model":
+    'Perplexity model override (default: "perplexity/sonar-pro").',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
+  "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
@@ -367,6 +410,11 @@ const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+  "agents.defaults.envelopeTimezone":
+    'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
+  "agents.defaults.envelopeTimestamp":
+    'Include absolute timestamps in message envelopes ("on" or "off").',
+  "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
@@ -374,26 +422,26 @@ const FIELD_HELP: Record<string, string> = {
     'Sources to index for memory search (default: ["memory"]; add "sessions" to include session transcripts).',
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Enable experimental session transcript indexing for memory search (default: false).",
-  "agents.defaults.memorySearch.provider": 'Embedding provider ("openai" or "local").',
+  "agents.defaults.memorySearch.provider": 'Embedding provider ("openai", "gemini", or "local").',
   "agents.defaults.memorySearch.remote.baseUrl":
-    "Custom OpenAI-compatible base URL (e.g. for Gemini/OpenRouter proxies).",
+    "Custom base URL for remote embeddings (OpenAI-compatible proxies or Gemini overrides).",
   "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
   "agents.defaults.memorySearch.remote.batch.enabled":
-    "Enable OpenAI Batch API for memory embeddings (default: true).",
+    "Enable batch API for memory embeddings (OpenAI/Gemini; default: true).",
   "agents.defaults.memorySearch.remote.batch.wait":
-    "Wait for OpenAI batch completion when indexing (default: true).",
+    "Wait for batch completion when indexing (default: true).",
   "agents.defaults.memorySearch.remote.batch.concurrency":
-    "Max concurrent OpenAI batch jobs for memory indexing (default: 2).",
+    "Max concurrent embedding batch jobs for memory indexing (default: 2).",
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
-    "Polling interval in ms for OpenAI batch status (default: 2000).",
+    "Polling interval in ms for batch status (default: 2000).",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes":
-    "Timeout in minutes for OpenAI batch indexing (default: 60).",
+    "Timeout in minutes for batch indexing (default: 60).",
   "agents.defaults.memorySearch.local.modelPath":
     "Local GGUF model path or hf: URI (node-llama-cpp).",
   "agents.defaults.memorySearch.fallback":
-    'Fallback to OpenAI when local embeddings fail ("openai" or "none").',
+    'Fallback provider when embeddings fail ("openai", "gemini", "local", or "none").',
   "agents.defaults.memorySearch.store.path":
     "SQLite index path (default: ~/.clawdbot/memory/{agentId}.sqlite).",
   "agents.defaults.memorySearch.store.vector.enabled":
@@ -520,6 +568,8 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
   "channels.imessage.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
+  "channels.bluebubbles.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
   "channels.discord.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
   "channels.discord.retry.attempts":
@@ -534,6 +584,7 @@ const FIELD_HELP: Record<string, string> = {
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
+  "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/clawdbot",
 };

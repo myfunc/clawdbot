@@ -81,6 +81,7 @@ function resolveExecConfig(cfg: ClawdbotConfig | undefined) {
     security: globalExec?.security,
     ask: globalExec?.ask,
     node: globalExec?.node,
+    pathPrepend: globalExec?.pathPrepend,
     backgroundMs: globalExec?.backgroundMs,
     timeoutSec: globalExec?.timeoutSec,
     cleanupMs: globalExec?.cleanupMs,
@@ -101,6 +102,8 @@ export function createClawdbotCodingTools(options?: {
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   agentDir?: string;
@@ -207,6 +210,7 @@ export function createClawdbotCodingTools(options?: {
     security: options?.exec?.security ?? execConfig.security,
     ask: options?.exec?.ask ?? execConfig.ask,
     node: options?.exec?.node ?? execConfig.node,
+    pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     agentId,
     cwd: options?.workspaceDir,
     allowBackground,
@@ -263,6 +267,8 @@ export function createClawdbotCodingTools(options?: {
       agentSessionKey: options?.sessionKey,
       agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
       agentAccountId: options?.agentAccountId,
+      agentTo: options?.messageTo,
+      agentThreadId: options?.messageThreadId,
       agentDir: options?.agentDir,
       sandboxRoot,
       workspaceDir: options?.workspaceDir,

@@ -22,6 +22,10 @@ Exec approvals are enforced locally on the execution host:
 - **gateway host** → `clawdbot` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
+Planned macOS split:
+- **node service** forwards `system.run` to the **macOS app** over local IPC.
+- **macOS app** enforces approvals + executes the command in UI context.
+
 ## Settings and storage
 
 Approvals live in a local JSON file on the execution host:
@@ -100,9 +104,27 @@ When **Auto-allow skill CLIs** is enabled, executables referenced by known skill
 are treated as allowlisted on nodes (macOS node or headless node host). This uses the Bridge RPC to ask the
 gateway for the skill bin list. Disable this if you want strict manual allowlists.
 
+## Control UI editing
+
+Use the **Control UI → Nodes → Exec approvals** card to edit defaults, per‑agent
+overrides, and allowlists. Pick a scope (Defaults or an agent), tweak the policy,
+add/remove allowlist patterns, then **Save**. The UI shows **last used** metadata
+per pattern so you can keep the list tidy.
+
+The target selector chooses **Gateway** (local approvals) or a **Node**. Nodes
+must advertise `system.execApprovals.get/set` (macOS app or headless node host).
+If a node does not advertise exec approvals yet, edit its local
+`~/.clawdbot/exec-approvals.json` directly.
+
+CLI: `clawdbot approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
+
 ## Approval flow
 
-When a prompt is required, the companion app displays a confirmation dialog with:
+When a prompt is required, the gateway broadcasts `exec.approval.requested` to operator clients.
+The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
+approved request to the node host.
+
+The confirmation dialog includes:
 - command + args
 - cwd
 - agent id
@@ -113,6 +135,19 @@ Actions:
 - **Allow once** → run now
 - **Always allow** → add to allowlist + run
 - **Deny** → block
+
+### macOS IPC flow (planned)
+```
+Gateway -> Bridge -> Node Service (TS)
+                    |  IPC (UDS + token + HMAC + TTL)
+                    v
+                Mac App (UI + approvals + system.run)
+```
+
+Security notes:
+- Unix socket mode `0600`, token stored in `exec-approvals.json`.
+- Same-UID peer check.
+- Challenge/response (nonce + HMAC token + request hash) + short TTL.
 
 ## System events
 

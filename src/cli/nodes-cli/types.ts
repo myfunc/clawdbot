@@ -8,6 +8,8 @@ export type NodesRpcOpts = {
   params?: string;
   invokeTimeout?: string;
   idempotencyKey?: string;
+  connected?: boolean;
+  lastConnected?: string;
   target?: string;
   x?: string;
   y?: string;
@@ -46,6 +48,8 @@ export type NodeListNode = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
@@ -54,6 +58,7 @@ export type NodeListNode = {
   permissions?: Record<string, boolean>;
   paired?: boolean;
   connected?: boolean;
+  connectedAtMs?: number;
 };
 
 export type PendingRequest = {
@@ -62,6 +67,8 @@ export type PendingRequest = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   remoteIp?: string;
   isRepair?: boolean;
   ts: number;
@@ -73,10 +80,13 @@ export type PairedNode = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   remoteIp?: string;
   permissions?: Record<string, boolean>;
   createdAtMs?: number;
   approvedAtMs?: number;
+  lastConnectedAtMs?: number;
 };
 
 export type PairingList = {

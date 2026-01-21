@@ -15,7 +15,13 @@ enum GatewayEndpointState: Sendable, Equatable {
 /// - The endpoint store owns observation + explicit "ensure tunnel" actions.
 actor GatewayEndpointStore {
     static let shared = GatewayEndpointStore()
-    private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let supportedBindModes: Set<String> = [
+        "loopback",
+        "tailnet",
+        "lan",
+        "auto",
+        "custom",
+    ]
     private static let remoteConnectingDetail = "Connecting to remote gateway…"
     private static let staticLogger = Logger(subsystem: "com.clawdbot", category: "gateway-endpoint")
     private enum EnvOverrideWarningKind: Sendable {
@@ -60,9 +66,12 @@ actor GatewayEndpointStore {
                 let bind = GatewayEndpointStore.resolveGatewayBindMode(
                     root: root,
                     env: ProcessInfo.processInfo.environment)
+                let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: root)
                 let tailscaleIP = await MainActor.run { TailscaleService.shared.tailscaleIP }
+                    ?? TailscaleService.fallbackTailnetIPv4()
                 return GatewayEndpointStore.resolveLocalGatewayHost(
                     bindMode: bind,
+                    customBindHost: customBindHost,
                     tailscaleIP: tailscaleIP)
             },
             remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
@@ -147,7 +156,8 @@ actor GatewayEndpointStore {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-               !configToken.isEmpty
+               !configToken.isEmpty,
+               configToken != trimmed
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
@@ -156,32 +166,23 @@ actor GatewayEndpointStore {
             }
             return trimmed
         }
+
+        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
+           !configToken.isEmpty
+        {
+            return configToken
+        }
+
         if isRemote {
-            if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let token = remote["token"] as? String
-            {
-                let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !value.isEmpty {
-                    return value
-                }
-            }
             return nil
         }
-        if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let token = auth["token"] as? String
-        {
-            let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty {
-                return value
-            }
-        }
+
         if let token = launchdSnapshot?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
             return token
         }
+
         return nil
     }
 
@@ -250,14 +251,21 @@ actor GatewayEndpointStore {
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
             root: ClawdbotConfigFile.loadDict(),
             env: ProcessInfo.processInfo.environment)
-        let host = GatewayEndpointStore.resolveLocalGatewayHost(bindMode: bind, tailscaleIP: nil)
+        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: ClawdbotConfigFile.loadDict())
+        let scheme = GatewayEndpointStore.resolveGatewayScheme(
+            root: ClawdbotConfigFile.loadDict(),
+            env: ProcessInfo.processInfo.environment)
+        let host = GatewayEndpointStore.resolveLocalGatewayHost(
+            bindMode: bind,
+            customBindHost: customBindHost,
+            tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
         switch initialMode {
         case .local:
             self.state = .ready(
                 mode: .local,
-                url: URL(string: "ws://\(host):\(port)")!,
+                url: URL(string: "\(scheme)://\(host):\(port)")!,
                 token: token,
                 password: password)
         case .remote:
@@ -294,9 +302,12 @@ actor GatewayEndpointStore {
             self.cancelRemoteEnsure()
             let port = self.deps.localPort()
             let host = await self.deps.localHost()
+            let scheme = GatewayEndpointStore.resolveGatewayScheme(
+                root: ClawdbotConfigFile.loadDict(),
+                env: ProcessInfo.processInfo.environment)
             self.setState(.ready(
                 mode: .local,
-                url: URL(string: "ws://\(host):\(port)")!,
+                url: URL(string: "\(scheme)://\(host):\(port)")!,
                 token: token,
                 password: password))
         case .remote:
@@ -307,9 +318,12 @@ actor GatewayEndpointStore {
                 return
             }
             self.cancelRemoteEnsure()
+            let scheme = GatewayEndpointStore.resolveGatewayScheme(
+                root: ClawdbotConfigFile.loadDict(),
+                env: ProcessInfo.processInfo.environment)
             self.setState(.ready(
                 mode: .remote,
-                url: URL(string: "ws://127.0.0.1:\(Int(port))")!,
+                url: URL(string: "\(scheme)://127.0.0.1:\(Int(port))")!,
                 token: token,
                 password: password))
         case .unconfigured:
@@ -408,7 +422,10 @@ actor GatewayEndpointStore {
 
             let token = self.deps.token()
             let password = self.deps.password()
-            let url = URL(string: "ws://127.0.0.1:\(Int(forwarded))")!
+            let scheme = GatewayEndpointStore.resolveGatewayScheme(
+                root: ClawdbotConfigFile.loadDict(),
+                env: ProcessInfo.processInfo.environment)
+            let url = URL(string: "\(scheme)://127.0.0.1:\(Int(forwarded))")!
             self.setState(.ready(mode: .remote, url: url, token: token, password: password))
             return (url, token, password)
         } catch let err as CancellationError {
@@ -457,6 +474,36 @@ actor GatewayEndpointStore {
         }
     }
 
+    func maybeFallbackToTailnet(from currentURL: URL) async -> GatewayConnection.Config? {
+        let mode = await self.deps.mode()
+        guard mode == .local else { return nil }
+
+        let root = ClawdbotConfigFile.loadDict()
+        let bind = GatewayEndpointStore.resolveGatewayBindMode(
+            root: root,
+            env: ProcessInfo.processInfo.environment)
+        guard bind == "auto" else { return nil }
+
+        let currentHost = currentURL.host?.lowercased() ?? ""
+        guard currentHost == "127.0.0.1" || currentHost == "localhost" else { return nil }
+
+        let tailscaleIP = await MainActor.run { TailscaleService.shared.tailscaleIP }
+            ?? TailscaleService.fallbackTailnetIPv4()
+        guard let tailscaleIP, !tailscaleIP.isEmpty else { return nil }
+
+        let scheme = GatewayEndpointStore.resolveGatewayScheme(
+            root: root,
+            env: ProcessInfo.processInfo.environment)
+        let port = self.deps.localPort()
+        let token = self.deps.token()
+        let password = self.deps.password()
+        let url = URL(string: "\(scheme)://\(tailscaleIP):\(port)")!
+
+        self.logger.info("auto bind fallback to tailnet host=\(tailscaleIP, privacy: .public)")
+        self.setState(.ready(mode: .local, url: url, token: token, password: password))
+        return (url, token, password)
+    }
+
     private static func resolveGatewayBindMode(
         root: [String: Any],
         env: [String: String]) -> String?
@@ -478,15 +525,51 @@ actor GatewayEndpointStore {
         return nil
     }
 
+    private static func resolveGatewayCustomBindHost(root: [String: Any]) -> String? {
+        if let gateway = root["gateway"] as? [String: Any],
+           let customBindHost = gateway["customBindHost"] as? String
+        {
+            let trimmed = customBindHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return nil
+    }
+
+    private static func resolveGatewayScheme(
+        root: [String: Any],
+        env: [String: String]) -> String
+    {
+        if let envValue = env["CLAWDBOT_GATEWAY_TLS"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !envValue.isEmpty
+        {
+            return (envValue == "1" || envValue.lowercased() == "true") ? "wss" : "ws"
+        }
+        if let gateway = root["gateway"] as? [String: Any],
+           let tls = gateway["tls"] as? [String: Any],
+           let enabled = tls["enabled"] as? Bool
+        {
+            return enabled ? "wss" : "ws"
+        }
+        return "ws"
+    }
+
     private static func resolveLocalGatewayHost(
         bindMode: String?,
+        customBindHost: String?,
         tailscaleIP: String?) -> String
     {
         switch bindMode {
-        case "tailnet", "auto":
-            tailscaleIP ?? "127.0.0.1"
+        case "tailnet":
+            return tailscaleIP ?? "127.0.0.1"
+        case "auto":
+            if let tailscaleIP, !tailscaleIP.isEmpty {
+                return tailscaleIP
+            }
+            return "127.0.0.1"
+        case "custom":
+            return customBindHost ?? "127.0.0.1"
         default:
-            "127.0.0.1"
+            return "127.0.0.1"
         }
     }
 }
@@ -557,9 +640,13 @@ extension GatewayEndpointStore {
 
     static func _testResolveLocalGatewayHost(
         bindMode: String?,
-        tailscaleIP: String?) -> String
+        tailscaleIP: String?,
+        customBindHost: String? = nil) -> String
     {
-        self.resolveLocalGatewayHost(bindMode: bindMode, tailscaleIP: tailscaleIP)
+        self.resolveLocalGatewayHost(
+            bindMode: bindMode,
+            customBindHost: customBindHost,
+            tailscaleIP: tailscaleIP)
     }
 }
 #endif

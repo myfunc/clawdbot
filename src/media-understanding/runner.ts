@@ -1,7 +1,7 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import type {
@@ -39,6 +39,8 @@ import {
 import { describeImageWithModel } from "./providers/image.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
+const AUTO_AUDIO_PROVIDERS = ["openai", "groq", "deepgram"] as const;
+
 export type ActiveMediaModel = {
   provider: string;
   model?: string;
@@ -63,6 +65,29 @@ export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
 
 export function createMediaAttachmentCache(attachments: MediaAttachment[]): MediaAttachmentCache {
   return new MediaAttachmentCache(attachments);
+}
+
+async function resolveAutoAudioEntries(params: {
+  cfg: ClawdbotConfig;
+  agentDir?: string;
+  providerRegistry: ProviderRegistry;
+}): Promise<MediaUnderstandingModelConfig[]> {
+  const entries: MediaUnderstandingModelConfig[] = [];
+  for (const providerId of AUTO_AUDIO_PROVIDERS) {
+    const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+    if (!provider?.transcribeAudio) continue;
+    try {
+      await resolveApiKeyForProvider({
+        provider: providerId,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+      });
+      entries.push({ type: "provider", provider: providerId });
+    } catch {
+      continue;
+    }
+  }
+  return entries;
 }
 
 function trimOutput(text: string, maxChars?: number): string {
@@ -275,13 +300,14 @@ async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const key = await resolveApiKeyForProvider({
+    const auth = await resolveApiKeyForProvider({
       provider: providerId,
       cfg,
       profileId: entry.profile,
       preferredProfile: entry.preferredProfile,
       agentDir: params.agentDir,
     });
+    const apiKey = requireApiKey(auth, providerId);
     const providerConfig = cfg.models?.providers?.[providerId];
     const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
     const mergedHeaders = {
@@ -300,7 +326,7 @@ async function runProviderEntry(params: {
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
-      apiKey: key.apiKey,
+      apiKey,
       baseUrl,
       headers,
       model,
@@ -334,19 +360,20 @@ async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const key = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProvider({
     provider: providerId,
     cfg,
     profileId: entry.profile,
     preferredProfile: entry.preferredProfile,
     agentDir: params.agentDir,
   });
+  const apiKey = requireApiKey(auth, providerId);
   const providerConfig = cfg.models?.providers?.[providerId];
   const result = await provider.describeVideo({
     buffer: media.buffer,
     fileName: media.fileName,
     mime: media.mime,
-    apiKey: key.apiKey,
+    apiKey,
     baseUrl: providerConfig?.baseUrl,
     headers: providerConfig?.headers,
     model: entry.model,
@@ -561,7 +588,15 @@ export async function runCapability(params: {
     providerRegistry: params.providerRegistry,
     activeModel: params.activeModel,
   });
-  if (entries.length === 0) {
+  let resolvedEntries = entries;
+  if (resolvedEntries.length === 0 && capability === "audio") {
+    resolvedEntries = await resolveAutoAudioEntries({
+      cfg,
+      agentDir: params.agentDir,
+      providerRegistry: params.providerRegistry,
+    });
+  }
+  if (resolvedEntries.length === 0) {
     return {
       outputs: [],
       decision: {
@@ -583,7 +618,7 @@ export async function runCapability(params: {
       agentDir: params.agentDir,
       providerRegistry: params.providerRegistry,
       cache: params.attachments,
-      entries,
+      entries: resolvedEntries,
       config,
     });
     if (output) outputs.push(output);

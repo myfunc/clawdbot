@@ -29,11 +29,14 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`sessions`](/cli/sessions)
 - [`gateway`](/cli/gateway)
 - [`daemon`](/cli/daemon)
+- [`service`](/cli/service)
 - [`logs`](/cli/logs)
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
 - [`nodes`](/cli/nodes)
+- [`devices`](/cli/devices)
 - [`node`](/cli/node)
+- [`approvals`](/cli/approvals)
 - [`sandbox`](/cli/sandbox)
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
@@ -143,6 +146,21 @@ clawdbot [--dev] [--profile <name>] <command>
     start
     stop
     restart
+  service
+    gateway
+      status
+      install
+      uninstall
+      start
+      stop
+      restart
+    node
+      status
+      install
+      uninstall
+      start
+      stop
+      restart
   logs
   models
     list
@@ -171,6 +189,7 @@ clawdbot [--dev] [--profile <name>] <command>
     runs
     run
   nodes
+  devices
   node
     start
     daemon
@@ -180,6 +199,10 @@ clawdbot [--dev] [--profile <name>] <command>
       start
       stop
       restart
+  approvals
+    get
+    set
+    allowlist add|remove
   browser
     status
     start
@@ -520,6 +543,9 @@ Options:
 - `--verbose`
 - `--debug` (alias for `--verbose`)
 
+Notes:
+- Overview includes Gateway + Node service status when available.
+
 ### Usage tracking
 Clawdbot can surface provider usage/quota when OAuth/API creds are available.
 
@@ -781,12 +807,15 @@ All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 
 Subcommands:
 - `node start --host <gateway-host> --port 18790`
-- `node daemon status`
-- `node daemon install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
-- `node daemon uninstall`
-- `node daemon start`
-- `node daemon stop`
-- `node daemon restart`
+- `node service status`
+- `node service install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
+- `node service uninstall`
+- `node service start`
+- `node service stop`
+- `node service restart`
+
+Legacy alias:
+- `node daemon …` (same as `node service …`)
 
 ## Nodes
 
@@ -796,9 +825,9 @@ Common options:
 - `--url`, `--token`, `--timeout`, `--json`
 
 Subcommands:
-- `nodes status`
+- `nodes status [--connected] [--last-connected <duration>]`
 - `nodes describe --node <id|name|ip>`
-- `nodes list`
+- `nodes list [--connected] [--last-connected <duration>]`
 - `nodes pending`
 - `nodes approve <requestId>`
 - `nodes reject <requestId>`

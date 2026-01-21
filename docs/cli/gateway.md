@@ -28,7 +28,7 @@ clawdbot gateway
 Notes:
 - By default, the Gateway refuses to start unless `gateway.mode=local` is set in `~/.clawdbot/clawdbot.json`. Use `--allow-unconfigured` for ad-hoc/dev runs.
 - Binding beyond loopback without auth is blocked (safety guardrail).
-- `SIGUSR1` triggers an in-process restart (useful without a supervisor).
+- `SIGUSR1` triggers an in-process restart when authorized (enable `commands.restart` or use the gateway tool/config apply/update).
 - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don’t restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
 
 ### Options
@@ -116,17 +116,20 @@ clawdbot gateway call logs.tail --params '{"sinceMs": 60000}'
 
 ## Discover gateways (Bonjour)
 
-`gateway discover` scans for Gateway bridge beacons (`_clawdbot-bridge._tcp`).
+`gateway discover` scans for Gateway beacons (`_clawdbot-gw._tcp`).
 
 - Multicast DNS-SD: `local.`
 - Unicast DNS-SD (Wide-Area Bonjour): `clawdbot.internal.` (requires split DNS + DNS server; see [/gateway/bonjour](/gateway/bonjour))
 
-Only gateways with the **bridge enabled** will advertise the discovery beacon.
+Only gateways with Bonjour discovery enabled (default) advertise the beacon.
 
 Wide-Area discovery records include (TXT):
+- `role` (gateway role hint)
+- `transport` (transport hint, e.g. `gateway`)
 - `gatewayPort` (WebSocket port, usually `18789`)
 - `sshPort` (SSH port; defaults to `22` if not present)
 - `tailnetDns` (MagicDNS hostname, when available)
+- `gatewayTls` / `gatewayTlsSha256` (TLS enabled + cert fingerprint)
 - `cliPath` (optional hint for remote installs)
 
 ### `gateway discover`

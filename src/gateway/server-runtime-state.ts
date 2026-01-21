@@ -3,7 +3,7 @@ import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
-import type { createSubsystemLogger } from "../logging.js";
+import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -18,17 +18,19 @@ import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import type { GatewayTlsRuntime } from "./server/tls.js";
 
 export async function createGatewayRuntimeState(params: {
-  cfg: {
-    canvasHost?: { root?: string; enabled?: boolean; liveReload?: boolean };
-  };
+  cfg: import("../config/config.js").ClawdbotConfig;
   bindHost: string;
   port: number;
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   openAiChatCompletionsEnabled: boolean;
+  openResponsesEnabled: boolean;
+  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   resolvedAuth: ResolvedGatewayAuth;
+  gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   pluginRegistry: PluginRegistry;
   deps: CliDeps;
@@ -103,9 +105,12 @@ export async function createGatewayRuntimeState(params: {
     controlUiEnabled: params.controlUiEnabled,
     controlUiBasePath: params.controlUiBasePath,
     openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
+    openResponsesEnabled: params.openResponsesEnabled,
+    openResponsesConfig: params.openResponsesConfig,
     handleHooksRequest,
     handlePluginRequest,
     resolvedAuth: params.resolvedAuth,
+    tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
   });
 
   await listenGatewayHttpServer({
